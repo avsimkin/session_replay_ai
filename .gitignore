@@ -1,0 +1,36 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# Virtual environments
+venv/
+env/
+ENV/
+.venv/
+.ENV/
+
+# PyCharm
+.idea/
+*.iml
+
+# Jupyter
+.ipynb_checkpoints
+
+# VSCode
+.vscode/
+
+# System
+.DS_Store
+
+# Project output files
+replay_text_summary.xlsx
+screens/
+summary_screens_results.json
+urls.txt
+cookies.json
+
+# Playwright
+playwright-report/
