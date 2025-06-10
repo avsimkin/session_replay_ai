@@ -11,6 +11,8 @@ import pytz
 from typing import Dict, Any
 
 from app.endpoints import router, run_script_safe
+from fastapi.openapi.docs import get_swagger_ui_html
+from fastapi.staticfiles import StaticFiles
 
 # Настройка логирования
 logging.basicConfig(
@@ -129,10 +131,31 @@ async def lifespan(app: FastAPI):
 
 # Создание FastAPI приложения
 app = FastAPI(
-    title="Analytics Scripts API",
-    description="API для автоматизации аналитических скриптов Session Replay",
+    title="📊 Analytics Scripts API",
+    description="""
+    ## 🚀 Автоматизация аналитических скриптов Session Replay
+    
+    Система автоматической обработки Session Replay данных из Amplitude с использованием:
+    - **BigQuery** для хранения данных
+    - **Playwright** для автоматизации браузера  
+    - **OpenAI** для генерации саммари
+    - **Google Drive** для хранения файлов
+    
+    ### 🔄 Автоматический пайплайн (ежедневно в 09:00 MSK):
+    1. Сбор Session Replay ссылок из BigQuery
+    2. Создание скриншотов через браузерную автоматизацию
+    3. ML-кластеризация и анализ данных
+    4. Генерация отчетов через LLM
+    
+    ### 📈 Мониторинг и управление:
+    - Статус планировщика и задач
+    - Ручной запуск отдельных этапов
+    - Логирование всех операций
+    """,
     version="1.0.0",
-    lifespan=lifespan
+    lifespan=lifespan,
+    docs_url="/docs",
+    redoc_url="/redoc"
 )
 
 # CORS middleware для веб-интерфейса (если нужен)
@@ -144,46 +167,51 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Подключение роутеров
+# Подключение роутеров с тегами
 app.include_router(router, prefix="/api")
 
-@app.get("/")
+@app.get("/", tags=["📍 General"])
 async def root():
-    """Корневой endpoint"""
+    """🏠 Главная страница API"""
     return {
-        "service": "Analytics Scripts API",
-        "status": "running",
+        "service": "📊 Analytics Scripts API",
+        "status": "🟢 running",
         "version": "1.0.0",
         "description": "Автоматизация скриптов анализа Session Replay",
         "scheduler_active": scheduler_running,
         "scheduled_jobs": len(schedule.jobs),
         "current_time_utc": datetime.now().isoformat(),
         "current_time_msk": datetime.now(moscow_tz).isoformat(),
+        "features": {
+            "🔄 automatic_pipeline": "Ежедневно в 09:00 MSK",
+            "🔗 collect_links": "BigQuery → Session Replay URLs",
+            "📸 screenshots": "Playwright → Google Drive",
+            "🧠 clustering": "ML анализ пользовательского поведения",
+            "📝 summarize": "OpenAI отчеты"
+        },
         "endpoints": {
-            "collect_links": "/api/collect-links",
-            "screenshots": "/api/replay-screenshots", 
-            "clustering": "/api/clustering",
-            "summarize": "/api/summarize",
-            "full_pipeline": "/api/full-pipeline",
-            "scripts_status": "/api/scripts/status",
-            "scheduler_status": "/scheduler/status",
-            "manual_pipeline": "/run/daily-pipeline"
+            "📋 scripts_status": "/api/monitoring/scripts",
+            "⏰ scheduler_status": "/scheduler/status",
+            "🚀 full_pipeline": "/api/pipeline/full",
+            "📅 daily_pipeline": "/api/pipeline/daily",
+            "📖 documentation": "/docs"
         }
     }
 
-@app.get("/health")
+@app.get("/health", tags=["📍 General"])
 async def health_check():
-    """Проверка здоровья сервиса"""
+    """💊 Проверка здоровья сервиса"""
     return {
-        "status": "healthy",
+        "status": "🟢 healthy",
         "timestamp": datetime.now().isoformat(),
         "scheduler_running": scheduler_running,
-        "environment": os.environ.get("ENVIRONMENT", "production")
+        "environment": os.environ.get("ENVIRONMENT", "production"),
+        "uptime": "Running since startup"
     }
 
-@app.get("/scheduler/status")
+@app.get("/scheduler/status", tags=["⏰ Scheduler"])
 async def scheduler_status():
-    """Статус планировщика и расписания"""
+    """⏰ Статус планировщика и расписания"""
     jobs_info = []
     
     for job in schedule.jobs:
@@ -210,16 +238,17 @@ async def scheduler_status():
             })
     
     return {
-        "scheduler_running": scheduler_running,
+        "scheduler_running": f"{'🟢' if scheduler_running else '🔴'} {scheduler_running}",
         "jobs_count": len(schedule.jobs),
         "jobs": jobs_info,
         "current_time_utc": datetime.now().isoformat(),
-        "current_time_msk": datetime.now(moscow_tz).isoformat()
+        "current_time_msk": datetime.now(moscow_tz).isoformat(),
+        "next_auto_run": "09:00 MSK ежедневно"
     }
 
-@app.post("/run/daily-pipeline")
+@app.post("/run/daily-pipeline", tags=["🔄 Manual Operations"])
 async def run_daily_pipeline_manual(background_tasks: BackgroundTasks):
-    """Ручной запуск ежедневного пайплайна"""
+    """🎯 Ручной запуск ежедневного пайплайна"""
     
     def execute_pipeline():
         logger.info("🎯 Ручной запуск ежедневного пайплайна")
@@ -234,9 +263,9 @@ async def run_daily_pipeline_manual(background_tasks: BackgroundTasks):
         "estimated_duration_minutes": "10-30"
     }
 
-@app.get("/logs")
+@app.get("/logs", tags=["📊 Monitoring"])
 async def get_recent_logs():
-    """Получение последних логов (упрощенная версия)"""
+    """📋 Информация о логах"""
     # В продакшене лучше использовать внешнее логирование (например, через Render Dashboard)
     return {
         "message": "Для просмотра логов используйте Render Dashboard",

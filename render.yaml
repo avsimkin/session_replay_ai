@@ -7,8 +7,8 @@ services:
     buildCommand: |
       pip install --upgrade pip
       pip install -r requirements.txt
-      playwright install chromium
-      python -c "import nltk; nltk.download('stopwords')"
+      playwright install chromium --with-deps
+      python -c "import nltk; nltk.download('stopwords', download_dir='/opt/render/project/src/nltk_data')"
     startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
     
     # Переменные окружения
@@ -19,6 +19,8 @@ services:
         value: "Europe/Moscow"
       - key: ENVIRONMENT
         value: "production"
+      - key: NLTK_DATA
+        value: "/opt/render/project/src/nltk_data"
       
       # Добавьте ваши секретные переменные через Render UI:
       # - GOOGLE_APPLICATION_CREDENTIALS (путь к JSON файлу с credentials)
