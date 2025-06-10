@@ -1,53 +1,30 @@
-# FastAPI и веб-сервер
-fastapi==0.104.1
-uvicorn==0.24.0
+# Основные зависимости
+fastapi>=0.100.0
+uvicorn[standard]>=0.20.0
+schedule>=1.2.0
+pytz
 
-# Планировщик задач
-schedule==1.2.0
-pytz==2023.3
+# Google Cloud
+google-cloud-bigquery>=3.0.0
+google-api-python-client>=2.0.0
+google-auth-httplib2
+google-auth-oauthlib
 
-# Работа с BigQuery
-google-cloud-bigquery==3.13.0
-google-auth==2.23.4
-google-oauth2-tool==0.0.3
+# Data processing
+pandas>=2.0.0
+numpy>=1.20.0
+scikit-learn>=1.3.0
+scipy>=1.10.0
+nltk>=3.8.0
 
-# Google Drive API
-google-api-python-client==2.108.0
-google-auth-httplib2==0.1.1
-google-auth-oauthlib==1.1.0
+# Browser automation
+playwright>=1.40.0
 
-# Обработка данных
-pandas==2.1.3
-numpy==1.25.2
+# AI
+openai>=1.0.0
 
-# Машинное обучение и кластеризация
-scikit-learn==1.3.2
-scipy==1.11.4
-nltk==3.8.1
-
-# Playwright для автоматизации браузера
-playwright==1.40.0
-
-# OpenAI для LLM
-openai==0.28.1
-
-# Утилиты
-python-dotenv==1.0.0
-requests==2.31.0
-aiofiles==0.24.1
-
-# Работа с изображениями
-Pillow==10.1.0
-
-# Логирование и мониторинг
-structlog==23.2.0
-
-# Работа с ZIP архивами (уже в стандартной библиотеке, но для ясности)
-# zipfile - встроенный модуль
-
-# Работа с JSON и временными файлами (встроенные модули)
-# json, tempfile, hashlib, random, time, datetime - встроенные
-
-# Дополнительные зависимости для стабильности
-typing-extensions==4.8.0
-pydantic==2.5.0
+# Utils
+python-dotenv
+requests
+aiofiles
+Pillow
