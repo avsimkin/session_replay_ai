@@ -1,4 +1,5 @@
 import os
+import sys
 import json
 import re
 from datetime import datetime, timedelta
@@ -6,6 +7,27 @@ from google.cloud import bigquery
 from google.oauth2 import service_account
 import pandas as pd
 import tempfile
+
+# Добавляем путь к корню проекта для импорта config
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+# Импортируем настройки (если доступны) или используем переменные окружения
+try:
+    from config.settings import settings
+    print("✅ Используем настройки из config.settings")
+except ImportError:
+    print("⚠️ config.settings недоступен, используем переменные окружения")
+    # Создаем mock объект с настройками из переменных окружения
+    class MockSettings:
+        GOOGLE_APPLICATION_CREDENTIALS = os.environ.get('GOOGLE_APPLICATION_CREDENTIALS', '/etc/secrets/bigquery-credentials.json')
+        BQ_PROJECT_ID = os.environ.get('BQ_PROJECT_ID', 'codellon-dwh')
+        BQ_DATASET_ID = os.environ.get('BQ_DATASET_ID', 'amplitude_session_replay')
+        BQ_TABLE_EVENTS = os.environ.get('BQ_TABLE_EVENTS', 'EVENTS_258068')
+        AMPLITUDE_PROJECT_ID = os.environ.get('AMPLITUDE_PROJECT_ID', '258068')
+        MIN_DURATION_SECONDS = int(os.environ.get('MIN_DURATION_SECONDS', '20'))
+        DAYS_BACK = int(os.environ.get('DAYS_BACK', '2'))
+    
+    settings = MockSettings()
 
 
 class BigQueryReplayCollector:
@@ -363,17 +385,29 @@ def main():
     print("🚀 ЗАПУСК СБОРЩИКА SESSION REPLAY ID")
     print("=" * 50)
 
+    # Используем настройки из переменных окружения
     CONFIG = {
-        'credentials_path': '/Users/avsimkin/PycharmProjects/session_replay_ai/venv/bigquery-credentials.json',
-        'project_id': 'codellon-dwh',
-        'dataset_id': 'amplitude',
-        'table_id': 'EVENTS_258068',
-        'output_dataset_id': 'amplitude_session_replay',
-        'amplitude_project_id': '258068',
-        'min_duration_seconds': 20
+        'credentials_path': settings.GOOGLE_APPLICATION_CREDENTIALS,
+        'project_id': settings.BQ_PROJECT_ID,
+        'dataset_id': 'amplitude',  # Исходный датасет с событиями
+        'table_id': settings.BQ_TABLE_EVENTS,
+        'output_dataset_id': settings.BQ_DATASET_ID,
+        'amplitude_project_id': settings.AMPLITUDE_PROJECT_ID,
+        'min_duration_seconds': settings.MIN_DURATION_SECONDS
     }
 
-    days_back = 2
+    # Валидация настроек
+    print("🔍 Проверяем настройки:")
+    print(f"📁 Credentials: {CONFIG['credentials_path']}")
+    print(f"🏢 Project ID: {CONFIG['project_id']}")
+    print(f"📊 Source table: {CONFIG['project_id']}.{CONFIG['dataset_id']}.{CONFIG['table_id']}")
+    print(f"💾 Output dataset: {CONFIG['output_dataset_id']}")
+
+    if not os.path.exists(CONFIG['credentials_path']):
+        print(f"❌ Credentials файл не найден: {CONFIG['credentials_path']}")
+        return {"status": "error", "error": "Credentials file not found"}
+
+    days_back = settings.DAYS_BACK
     end_date = datetime.now().date()
     start_date = end_date - timedelta(days=days_back)
 
@@ -391,7 +425,7 @@ def main():
 
         if not collector.test_connection():
             print("❌ Тест подключения не прошел. Завершаем работу.")
-            return
+            return {"status": "error", "error": "BigQuery connection failed"}
 
         print(f"🔍 Собираем Session Replay ID...")
         df = collector.get_session_replay_ids_with_duration(
@@ -402,7 +436,7 @@ def main():
 
         if df.empty:
             print(f"⚠️ Не найдено ни одной сессии")
-            return
+            return {"status": "success", "collected_urls": 0, "message": "No sessions found"}
 
         print(f"🔗 Форматируем URL...")
         urls_data = collector.format_replay_urls(
@@ -412,7 +446,7 @@ def main():
 
         if not urls_data:
             print("❌ Не удалось сформировать ни одного URL")
-            return
+            return {"status": "error", "error": "Failed to format URLs"}
 
         collector.save_urls_to_bigquery(urls_data, start_date.strftime('%Y-%m-%d'), end_date.strftime('%Y-%m-%d'))
 
@@ -420,11 +454,28 @@ def main():
         print(f"✅ Собрано и сохранено {len(urls_data)} Session Replay URL")
         print(f"💾 Таблица: {CONFIG['project_id']}.{CONFIG['output_dataset_id']}.session_replay_urls")
 
+        # Возвращаем результат для API
+        return {
+            "status": "success",
+            "collected_urls": len(urls_data),
+            "period": f"{start_date} - {end_date}",
+            "table": f"{CONFIG['project_id']}.{CONFIG['output_dataset_id']}.session_replay_urls",
+            "message": f"Successfully collected {len(urls_data)} Session Replay URLs"
+        }
+
     except Exception as e:
         print(f"❌ Ошибка: {e}")
         import traceback
         traceback.print_exc()
+        
+        # Возвращаем ошибку для API
+        return {
+            "status": "error",
+            "error": str(e),
+            "traceback": traceback.format_exc()
+        }
 
 
 if __name__ == "__main__":
-    main()
+    result = main()
+    print(f"\n📋 Итоговый результат: {result}")

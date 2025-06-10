@@ -22,6 +22,32 @@ services:
       - key: NLTK_DATA
         value: "/opt/render/project/src/nltk_data"
       
+      # BigQuery настройки
+      - key: BQ_PROJECT_ID
+        value: "codellon-dwh"
+      - key: BQ_DATASET_ID  
+        value: "amplitude_session_replay"
+      - key: BQ_TABLE_EVENTS
+        value: "EVENTS_258068"
+      - key: BQ_TABLE_COMPLETE
+        value: "replay_text_complete"
+      
+      # Amplitude настройки
+      - key: AMPLITUDE_PROJECT_ID
+        value: "258068"
+      
+      # Настройки скриптов
+      - key: MIN_DURATION_SECONDS
+        value: "20"
+      - key: DAYS_BACK
+        value: "2"
+      
+      # Пути к файлам (будут настроены через Secret Files)
+      - key: GOOGLE_APPLICATION_CREDENTIALS
+        value: "/etc/secrets/bigquery-credentials.json"
+      - key: COOKIES_PATH
+        value: "/etc/secrets/cookies_new.json"
+      
       # Добавьте ваши секретные переменные через Render UI:
       # - GOOGLE_APPLICATION_CREDENTIALS (путь к JSON файлу с credentials)
       # - OPENAI_API_KEY
