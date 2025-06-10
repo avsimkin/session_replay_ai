@@ -1,0 +1,39 @@
+services:
+  - type: web
+    name: analytics-scripts-api
+    env: python
+    plan: starter  # Можете изменить на standard или pro при необходимости
+    region: oregon  # Или другой регион по выбору
+    buildCommand: |
+      pip install --upgrade pip
+      pip install -r requirements.txt
+      playwright install chromium
+      python -c "import nltk; nltk.download('stopwords')"
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    
+    # Переменные окружения
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.11"
+      - key: TZ
+        value: "Europe/Moscow"
+      - key: ENVIRONMENT
+        value: "production"
+      
+      # Добавьте ваши секретные переменные через Render UI:
+      # - GOOGLE_APPLICATION_CREDENTIALS (путь к JSON файлу с credentials)
+      # - OPENAI_API_KEY
+      # - BQ_PROJECT_ID (если нужно переопределить)
+      # - GDRIVE_FOLDER_ID (если нужно переопределить)
+    
+    # Настройки для автоматического деплоя
+    autoDeploy: true
+    
+    # Проверки здоровья
+    healthCheckPath: /health
+    
+    # Диск для временных файлов (если нужен больший объем)
+    disk:
+      name: analytics-disk
+      mountPath: /tmp
+      sizeGB: 1
