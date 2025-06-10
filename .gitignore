@@ -1,36 +1,35 @@
+# Experiments and temp files
+experiments/
+temp/
+temp_session_*/
+
 # Python
-__pycache__/
 *.pyc
+__pycache__/
 *.pyo
 *.pyd
 .Python
+*.so
 
-# Virtual environments
+# Environment
+.env
+.venv
 venv/
-env/
-ENV/
-.venv/
-.ENV/
 
-# PyCharm
-.idea/
-*.iml
+# Logs and data
+*.log
+*.json
+*.zip
+cookies*.json
+session_*.zip
+*_results.json
 
-# Jupyter
-.ipynb_checkpoints
-
-# VSCode
+# IDE
 .vscode/
+.idea/
+*.swp
+*.swo
 
-# System
+# OS
 .DS_Store
-
-# Project output files
-replay_text_summary.xlsx
-screens/
-summary_screens_results.json
-urls.txt
-cookies.json
-
-# Playwright
-playwright-report/
+Thumbs.db
