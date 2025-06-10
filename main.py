@@ -11,8 +11,6 @@ import pytz
 from typing import Dict, Any
 
 from app.endpoints import router, run_script_safe
-from fastapi.openapi.docs import get_swagger_ui_html
-from fastapi.staticfiles import StaticFiles
 
 # Настройка логирования
 logging.basicConfig(

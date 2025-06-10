@@ -4,16 +4,11 @@ import subprocess
 import os
 import logging
 from datetime import datetime
+import sys
 from typing import Dict, Any, Optional
 
-# Создаем несколько роутеров для категоризации
+# Основной роутер
 router = APIRouter()
-
-# Отдельные роутеры для разных категорий
-scripts_router = APIRouter(prefix="/scripts", tags=["🔧 Scripts Management"])
-pipeline_router = APIRouter(prefix="/pipeline", tags=["🔄 Pipeline Operations"])  
-monitoring_router = APIRouter(prefix="/monitoring", tags=["📊 Monitoring & Status"])
-
 logger = logging.getLogger(__name__)
 
 def run_script_safe(script_path: str, script_name: str) -> Dict[str, Any]:
@@ -28,7 +23,7 @@ def run_script_safe(script_path: str, script_name: str) -> Dict[str, Any]:
         
         # Запускаем скрипт
         result = subprocess.run(
-            ['python', script_path], 
+            [sys.executable, script_path], 
             capture_output=True, 
             text=True, 
             timeout=1800  # 30 минут максимум
@@ -95,9 +90,10 @@ async def run_script_background(script_path: str, script_name: str, background_t
 
 # === SCRIPTS MANAGEMENT ENDPOINTS ===
 
-@scripts_router.post("/collect-links", 
-                    summary="🔗 Сбор Session Replay ссылок",
-                    description="Извлечение Session Replay ID из BigQuery и формирование ссылок")
+@router.post("/scripts/collect-links", 
+            summary="🔗 Сбор Session Replay ссылок",
+            description="Извлечение Session Replay ID из BigQuery и формирование ссылок",
+            tags=["🔧 Scripts Management"])
 async def run_collect_links(background_tasks: BackgroundTasks, sync: bool = False):
     """Запуск сборщика Session Replay ссылок из BigQuery"""
     script_path = "scripts/collect_links_put_gbq.py"
@@ -110,9 +106,10 @@ async def run_collect_links(background_tasks: BackgroundTasks, sync: bool = Fals
     else:
         return await run_script_background(script_path, "Collect Links", background_tasks)
 
-@scripts_router.post("/screenshots", 
-                    summary="📸 Создание скриншотов",
-                    description="Автоматизированное создание скриншотов Session Replay через Playwright")
+@router.post("/scripts/screenshots", 
+            summary="📸 Создание скриншотов",
+            description="Автоматизированное создание скриншотов Session Replay через Playwright",
+            tags=["🔧 Scripts Management"])
 async def run_replay_screenshots(background_tasks: BackgroundTasks, sync: bool = False):
     """Запуск сборщика скриншотов Session Replay"""
     script_path = "scripts/replay_ai_gbq.py"
@@ -125,9 +122,10 @@ async def run_replay_screenshots(background_tasks: BackgroundTasks, sync: bool =
     else:
         return await run_script_background(script_path, "Replay Screenshots", background_tasks)
 
-@scripts_router.post("/clustering", 
-                    summary="🧠 ML-кластеризация",
-                    description="Машинное обучение и кластеризация пользовательских сессий")
+@router.post("/scripts/clustering", 
+            summary="🧠 ML-кластеризация",
+            description="Машинное обучение и кластеризация пользовательских сессий",
+            tags=["🔧 Scripts Management"])
 async def run_clustering(background_tasks: BackgroundTasks, sync: bool = False):
     """Запуск кластеризации данных"""
     script_path = "scripts/get_clasters_gbq.py"
@@ -140,9 +138,10 @@ async def run_clustering(background_tasks: BackgroundTasks, sync: bool = False):
     else:
         return await run_script_background(script_path, "Clustering", background_tasks)
 
-@scripts_router.post("/summarize", 
-                    summary="📝 AI Саммари",
-                    description="Генерация аналитических отчетов через OpenAI")
+@router.post("/scripts/summarize", 
+            summary="📝 AI Саммари",
+            description="Генерация аналитических отчетов через OpenAI",
+            tags=["🔧 Scripts Management"])
 async def run_summarize(background_tasks: BackgroundTasks, sync: bool = False):
     """Запуск создания саммари через LLM"""
     script_path = "scripts/summarazing.py"
@@ -157,9 +156,10 @@ async def run_summarize(background_tasks: BackgroundTasks, sync: bool = False):
 
 # === PIPELINE OPERATIONS ===
 
-@pipeline_router.post("/full", 
-                     summary="🚀 Полный пайплайн",
-                     description="Запуск всех этапов обработки данных последовательно")
+@router.post("/pipeline/full", 
+            summary="🚀 Полный пайплайн",
+            description="Запуск всех этапов обработки данных последовательно",
+            tags=["🔄 Pipeline Operations"])
 async def run_full_pipeline(background_tasks: BackgroundTasks):
     """Запуск полного пайплайна обработки данных"""
     
@@ -194,31 +194,12 @@ async def run_full_pipeline(background_tasks: BackgroundTasks):
         "scripts": ["🔗 Collect Links", "📸 Replay Screenshots", "🧠 Clustering", "📝 Summarize"]
     }
 
-@pipeline_router.post("/daily", 
-                     summary="📅 Ежедневный пайплайн",
-                     description="Ручной запуск ежедневного автоматического пайплайна")
-async def run_daily_pipeline_manual(background_tasks: BackgroundTasks):
-    """Ручной запуск ежедневного пайплайна"""
-    
-    def execute_pipeline():
-        logger.info("🎯 Ручной запуск ежедневного пайплайна")
-        # Здесь будет логика из main.py функции run_daily_analytics_pipeline
-        return {"status": "manual_daily_pipeline_completed"}
-    
-    background_tasks.add_task(execute_pipeline)
-    
-    return {
-        "message": "Ежедневный пайплайн запущен вручную",
-        "status": "queued", 
-        "start_time": datetime.now().isoformat(),
-        "estimated_duration_minutes": "10-30"
-    }
-
 # === MONITORING & STATUS ===
 
-@monitoring_router.get("/scripts", 
-                      summary="📋 Статус скриптов",
-                      description="Проверка доступности и готовности всех скриптов")
+@router.get("/monitoring/scripts", 
+           summary="📋 Статус скриптов",
+           description="Проверка доступности и готовности всех скриптов",
+           tags=["📊 Monitoring"])
 async def get_scripts_status():
     """Статус доступных скриптов"""
     scripts = [
@@ -243,3 +224,59 @@ async def get_scripts_status():
         "total_scripts": len(scripts),
         "ready_scripts": sum(1 for s in scripts_status if s["status"] == "✅ ready")
     }
+
+# === LEGACY ENDPOINTS (для обратной совместимости) ===
+
+@router.post("/collect-links", 
+            summary="🔗 Сбор ссылок (legacy)",
+            description="Устаревший endpoint, используйте /scripts/collect-links",
+            deprecated=True,
+            tags=["⚠️ Legacy"])
+async def run_collect_links_legacy(background_tasks: BackgroundTasks, sync: bool = False):
+    """Legacy endpoint - используйте /scripts/collect-links"""
+    return await run_collect_links(background_tasks, sync)
+
+@router.post("/replay-screenshots", 
+            summary="📸 Скриншоты (legacy)",
+            description="Устаревший endpoint, используйте /scripts/screenshots", 
+            deprecated=True,
+            tags=["⚠️ Legacy"])
+async def run_replay_screenshots_legacy(background_tasks: BackgroundTasks, sync: bool = False):
+    """Legacy endpoint - используйте /scripts/screenshots"""
+    return await run_replay_screenshots(background_tasks, sync)
+
+@router.post("/clustering", 
+            summary="🧠 Кластеризация (legacy)",
+            description="Устаревший endpoint, используйте /scripts/clustering",
+            deprecated=True,
+            tags=["⚠️ Legacy"])
+async def run_clustering_legacy(background_tasks: BackgroundTasks, sync: bool = False):
+    """Legacy endpoint - используйте /scripts/clustering"""
+    return await run_clustering(background_tasks, sync)
+
+@router.post("/summarize", 
+            summary="📝 Саммари (legacy)",
+            description="Устаревший endpoint, используйте /scripts/summarize",
+            deprecated=True,
+            tags=["⚠️ Legacy"])
+async def run_summarize_legacy(background_tasks: BackgroundTasks, sync: bool = False):
+    """Legacy endpoint - используйте /scripts/summarize"""
+    return await run_summarize(background_tasks, sync)
+
+@router.post("/full-pipeline", 
+            summary="🚀 Полный пайплайн (legacy)",
+            description="Устаревший endpoint, используйте /pipeline/full",
+            deprecated=True,
+            tags=["⚠️ Legacy"])
+async def run_full_pipeline_legacy(background_tasks: BackgroundTasks):
+    """Legacy endpoint - используйте /pipeline/full"""
+    return await run_full_pipeline(background_tasks)
+
+@router.get("/scripts/status", 
+           summary="📋 Статус скриптов (legacy)",
+           description="Устаревший endpoint, используйте /monitoring/scripts",
+           deprecated=True,
+           tags=["⚠️ Legacy"])
+async def get_scripts_status_legacy():
+    """Legacy endpoint - используйте /monitoring/scripts"""
+    return await get_scripts_status()
