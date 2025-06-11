@@ -134,6 +134,7 @@ class BigQueryReplayCollector:
     def get_session_replay_ids_with_duration(self, start_date, end_date, min_duration_seconds=20, amplitude_id=None):
         """Получение Session Replay ID с фильтрацией по длительности сессии"""
 
+        # ОБНОВЛЕННЫЙ РАБОЧИЙ SQL ЗАПРОС
         query = f"""
         WITH session_data AS (
             SELECT 
@@ -274,50 +275,43 @@ class BigQueryReplayCollector:
         print(f"✅ Успешно сформировано {len(urls_data)} записей")
         return urls_data
 
-    def check_existing_dates(self, start_date, end_date):
-        """Проверка какие даты уже есть в таблице"""
-        try:
-            check_query = f"""
-            SELECT DISTINCT record_date
-            FROM `{self.output_table_name}`
-            WHERE record_date BETWEEN '{start_date}' AND '{end_date}'
-            ORDER BY record_date
-            """
-
-            result = self.client.query(check_query).result()
-            existing_dates = {row.record_date for row in result}
-
-            if existing_dates:
-                print(f"📅 Найдены существующие данные за даты: {sorted(existing_dates)}")
-                return existing_dates
-            else:
-                print(f"✅ Данных за период {start_date} - {end_date} в таблице нет")
-                return set()
-
-        except Exception as e:
-            print(f"⚠️ Не удалось проверить существующие даты (возможно таблица не существует): {e}")
-            return set()
-
-    def filter_new_data(self, urls_data, existing_dates):
-        """Фильтрация данных - оставляем только новые даты"""
-        if not existing_dates:
+    def filter_new_data(self, urls_data, start_date, end_date):
+        """Фильтрация данных - оставляем только новые session_replay_id"""
+        if not urls_data:
             return urls_data
 
         original_count = len(urls_data)
+        
+        try:
+            # Получаем все существующие session_replay_id за период
+            check_query = f"""
+            SELECT DISTINCT session_replay_id
+            FROM `{self.output_table_name}`
+            WHERE record_date BETWEEN '{start_date}' AND '{end_date}'
+            """
+            
+            result = self.client.query(check_query).result()
+            existing_session_ids = {row.session_replay_id for row in result}
+            
+            print(f"📋 Найдено {len(existing_session_ids)} существующих session_replay_id за период")
+            
+        except Exception as e:
+            print(f"⚠️ Не удалось проверить существующие session_replay_id: {e}")
+            existing_session_ids = set()
 
+        # Фильтруем по session_replay_id
         filtered_data = []
         for record in urls_data:
-            record_date_str = record['record_date']
-            record_date = datetime.strptime(record_date_str, '%Y-%m-%d').date()
-
-            if record_date not in existing_dates:
+            session_replay_id = record['session_replay_id']
+            
+            if session_replay_id not in existing_session_ids:
                 filtered_data.append(record)
 
         filtered_count = len(filtered_data)
         skipped_count = original_count - filtered_count
 
         if skipped_count > 0:
-            print(f"🔄 Отфильтровано {skipped_count} записей (даты уже существуют)")
+            print(f"🔄 Отфильтровано {skipped_count} записей (session_replay_id уже существуют)")
             print(f"✅ Осталось {filtered_count} новых записей для загрузки")
 
         return filtered_data
@@ -332,14 +326,11 @@ class BigQueryReplayCollector:
             # Создаем таблицу если не существует
             self.create_output_table()
 
-            # Проверяем существующие даты
-            existing_dates = self.check_existing_dates(start_date, end_date)
-
-            # Фильтруем данные - оставляем только новые даты
-            urls_data = self.filter_new_data(urls_data, existing_dates)
+            # Фильтруем данные - оставляем только новые session_replay_id
+            urls_data = self.filter_new_data(urls_data, start_date, end_date)
 
             if not urls_data:
-                print("ℹ️ Все данные за этот период уже существуют в таблице")
+                print("ℹ️ Все session_replay_id за этот период уже существуют в таблице")
                 return
 
             print(f"💾 Сохраняем {len(urls_data)} записей в BigQuery...")
