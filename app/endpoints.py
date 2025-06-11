@@ -96,7 +96,7 @@ async def run_script_background(script_path: str, script_name: str, background_t
             tags=["🔧 Scripts Management"])
 async def run_collect_links(background_tasks: BackgroundTasks, sync: bool = False):
     """Запуск сборщика Session Replay ссылок из BigQuery"""
-    script_path = "scripts/collect_links_put_gbq.py"
+    script_path = "scripts/1_collect_links_put_gbq.py"
     
     if sync:
         result = run_script_safe(script_path, "Collect Links")
@@ -112,7 +112,7 @@ async def run_collect_links(background_tasks: BackgroundTasks, sync: bool = Fals
             tags=["🔧 Scripts Management"])
 async def run_replay_screenshots(background_tasks: BackgroundTasks, sync: bool = False):
     """Запуск сборщика скриншотов Session Replay"""
-    script_path = "scripts/replay_ai_gbq.py"
+    script_path = "scripts/2_replay_ai_gbq.py"
     
     if sync:
         result = run_script_safe(script_path, "Replay Screenshots")
@@ -122,13 +122,29 @@ async def run_replay_screenshots(background_tasks: BackgroundTasks, sync: bool =
     else:
         return await run_script_background(script_path, "Replay Screenshots", background_tasks)
 
+@router.post("/scripts/extract-text", 
+            summary="📄 Извлечение текста",
+            description="Обработка скриншотов и извлечение текста из Google Drive",
+            tags=["🔧 Scripts Management"])
+async def run_extract_text(background_tasks: BackgroundTasks, sync: bool = False):
+    """Запуск извлечения текста из скриншотов"""
+    script_path = "scripts/3_collect_replay_screens.py"
+    
+    if sync:
+        result = run_script_safe(script_path, "Extract Text")
+        if result["status"] == "error":
+            raise HTTPException(status_code=500, detail=result)
+        return result
+    else:
+        return await run_script_background(script_path, "Extract Text", background_tasks)
+
 @router.post("/scripts/clustering", 
             summary="🧠 ML-кластеризация",
             description="Машинное обучение и кластеризация пользовательских сессий",
             tags=["🔧 Scripts Management"])
 async def run_clustering(background_tasks: BackgroundTasks, sync: bool = False):
     """Запуск кластеризации данных"""
-    script_path = "scripts/get_clasters_gbq.py"
+    script_path = "scripts/4_get_clasters_gbq.py"
     
     if sync:
         result = run_script_safe(script_path, "Clustering")
@@ -144,7 +160,7 @@ async def run_clustering(background_tasks: BackgroundTasks, sync: bool = False):
             tags=["🔧 Scripts Management"])
 async def run_summarize(background_tasks: BackgroundTasks, sync: bool = False):
     """Запуск создания саммари через LLM"""
-    script_path = "scripts/summarazing.py"
+    script_path = "scripts/5_summarazing.py"
     
     if sync:
         result = run_script_safe(script_path, "Summarize")
@@ -166,10 +182,11 @@ async def run_full_pipeline(background_tasks: BackgroundTasks):
     def execute_pipeline():
         pipeline_results = []
         scripts = [
-            ("scripts/collect_links_put_gbq.py", "🔗 Collect Links"),
-            ("scripts/replay_ai_gbq.py", "📸 Replay Screenshots"), 
-            ("scripts/get_clasters_gbq.py", "🧠 Clustering"),
-            ("scripts/summarazing.py", "📝 Summarize")
+            ("scripts/1_collect_links_put_gbq.py", "🔗 Collect Links"),
+            ("scripts/2_replay_ai_gbq.py", "📸 Replay Screenshots"), 
+            ("scripts/3_collect_replay_screens.py", "📄 Extract Text"),
+            ("scripts/4_get_clasters_gbq.py", "🧠 Clustering"),
+            ("scripts/5_summarazing.py", "📝 Summarize")
         ]
         
         for script_path, script_name in scripts:
@@ -191,7 +208,7 @@ async def run_full_pipeline(background_tasks: BackgroundTasks):
     return {
         "message": "Полный пайплайн добавлен в очередь выполнения",
         "status": "queued",
-        "scripts": ["🔗 Collect Links", "📸 Replay Screenshots", "🧠 Clustering", "📝 Summarize"]
+        "scripts": ["🔗 Collect Links", "📸 Replay Screenshots", "📄 Extract Text", "🧠 Clustering", "📝 Summarize"]
     }
 
 # === MONITORING & STATUS ===
@@ -203,10 +220,11 @@ async def run_full_pipeline(background_tasks: BackgroundTasks):
 async def get_scripts_status():
     """Статус доступных скриптов"""
     scripts = [
-        {"name": "🔗 Collect Links", "path": "scripts/collect_links_put_gbq.py"},
-        {"name": "📸 Replay Screenshots", "path": "scripts/replay_ai_gbq.py"},
-        {"name": "🧠 Clustering", "path": "scripts/get_clasters_gbq.py"},
-        {"name": "📝 Summarize", "path": "scripts/summarazing.py"}
+        {"name": "🔗 Collect Links", "path": "scripts/1_collect_links_put_gbq.py"},
+        {"name": "📸 Replay Screenshots", "path": "scripts/2_replay_ai_gbq.py"},
+        {"name": "📄 Extract Text", "path": "scripts/3_collect_replay_screens.py"},
+        {"name": "🧠 Clustering", "path": "scripts/4_get_clasters_gbq.py"},
+        {"name": "📝 Summarize", "path": "scripts/5_summarazing.py"}
     ]
     
     scripts_status = []

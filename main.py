@@ -28,10 +28,11 @@ def run_daily_analytics_pipeline():
     logger.info("🚀 Запуск ежедневного пайплайна аналитики")
     
     pipeline_steps = [
-        ("scripts/collect_links_put_gbq.py", "Сбор Session Replay ссылок"),
-        ("scripts/replay_ai_gbq.py", "Создание скриншотов"),
-        ("scripts/get_clasters_gbq.py", "Кластеризация данных"),
-        ("scripts/summarazing.py", "Создание саммари")
+        ("scripts/1_collect_links_put_gbq.py", "Сбор Session Replay ссылок"),
+        ("scripts/2_replay_ai_gbq.py", "Создание скриншотов"),
+        ("scripts/3_collect_replay_screens.py", "Извлечение текста"),
+        ("scripts/4_get_clasters_gbq.py", "Кластеризация данных"),
+        ("scripts/5_summarazing.py", "Создание саммари")
     ]
     
     results = []
