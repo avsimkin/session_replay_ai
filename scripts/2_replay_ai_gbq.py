@@ -119,23 +119,34 @@ class BigQueryScreenshotCollector:
         self._load_cookies()
 
     def _init_bigquery(self):
-        """Initialize BigQuery client"""
+        """Initialize BigQuery connection"""
         try:
+            # Check if credentials file exists
             if not os.path.exists(self.credentials_path):
-                raise FileNotFoundError(f"Credentials file not found: {self.credentials_path}")
-                
-            credentials = service_account.Credentials.from_service_account_file(
-                self.credentials_path,
-                scopes=["https://www.googleapis.com/auth/bigquery"]
+                raise FileNotFoundError(f"Credentials file not found at {self.credentials_path}")
+            
+            # Initialize BigQuery client with explicit location
+            self.bq_client = bigquery.Client(
+                project=self.bq_project_id,
+                credentials=service_account.Credentials.from_service_account_file(
+                    self.credentials_path
+                ),
+                location='US'  # Explicitly set location to US
             )
-            self.bq_client = bigquery.Client(credentials=credentials, project=self.bq_project_id)
+            
+            # Test connection
+            self.bq_client.get_project()
             logger.info("✅ BigQuery connected")
             
             # Create processed_urls table if it doesn't exist
             self._create_processed_urls_table()
             
+            # List available tables for debugging
+            tables = list(self.bq_client.list_tables(f"{self.bq_project_id}.{self.bq_dataset_id}"))
+            logger.info(f"Available tables in dataset: {[table.table_id for table in tables]}")
+            
         except Exception as e:
-            logger.error(f"❌ Error connecting to BigQuery: {e}")
+            logger.error(f"❌ Failed to initialize BigQuery: {str(e)}")
             raise
 
     def _create_processed_urls_table(self):
@@ -196,41 +207,44 @@ class BigQueryScreenshotCollector:
     def get_unprocessed_urls(self):
         """Get unprocessed URLs from BigQuery"""
         try:
+            # First check if table exists
+            table_ref = f"{self.bq_project_id}.{self.bq_dataset_id}.{self.bq_table_id}"
+            try:
+                self.bq_client.get_table(table_ref)
+                logger.info(f"✅ Table {table_ref} exists")
+            except Exception as e:
+                logger.error(f"❌ Table {table_ref} not found: {str(e)}")
+                raise
+
             query = f"""
             SELECT DISTINCT
                 url,
                 session_id,
                 user_id,
                 event_time
-            FROM {self.full_table_name}
+            FROM `{self.bq_project_id}.{self.bq_dataset_id}.{self.bq_table_id}`
             WHERE url IS NOT NULL
             AND url NOT IN (
-                SELECT url 
+                SELECT url
                 FROM `{self.bq_project_id}.{self.bq_dataset_id}.processed_urls`
             )
             ORDER BY event_time DESC
             LIMIT 100
             """
             
-            logger.info(f"🔍 Executing query: {query}")
-            query_job = self.bq_client.query(query)
+            logger.info("🔍 Executing query:")
+            logger.info(query)
+            
+            query_job = self.bq_client.query(
+                query,
+                location='US'  # Explicitly set location for query
+            )
+            
             results = query_job.result()
-            
-            urls_data = []
-            for row in results:
-                urls_data.append({
-                    'url': row.url,
-                    'session_id': row.session_id,
-                    'user_id': row.user_id,
-                    'event_time': row.event_time
-                })
-            
-            logger.info(f"✅ Found {len(urls_data)} unprocessed URLs")
-            return urls_data
+            return list(results)
             
         except Exception as e:
-            logger.error(f"❌ Error fetching unprocessed URLs: {e}")
-            logger.error(traceback.format_exc())
+            logger.error(f"❌ Error fetching unprocessed URLs: {str(e)}")
             raise
 
     def mark_url_as_processed(self, url, success):
