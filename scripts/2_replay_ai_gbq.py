@@ -39,6 +39,7 @@ except ImportError:
         BQ_PROJECT_ID = os.environ.get('BQ_PROJECT_ID', 'codellon-dwh')
         BQ_DATASET_ID = os.environ.get('BQ_DATASET_ID', 'amplitude_session_replay')
         BQ_TABLE_EVENTS = os.environ.get('BQ_TABLE_EVENTS', 'EVENTS_258068')
+        BQ_TABLE_ID = os.environ.get('BQ_TABLE_ID', 'session_replay_urls')
         GDRIVE_FOLDER_ID = os.environ.get('GDRIVE_FOLDER_ID', '1K8cbFU2gYpvP3PiHwOOHS1KREqdj6fQX')
         COOKIES_PATH = os.environ.get('COOKIES_PATH', '/etc/secrets/cookies.json')
         BATCH_SIZE = int(os.environ.get('BATCH_SIZE', '20'))
@@ -108,7 +109,7 @@ class BigQueryScreenshotCollector:
         self.credentials_path = credentials_path
         self.bq_project_id = bq_project_id
         self.bq_dataset_id = bq_dataset_id
-        self.bq_table_id = os.environ.get('BQ_TABLE_ID', bq_table_id or 'session_replay_urls')
+        self.bq_table_id = bq_table_id
         self.gdrive_folder_id = gdrive_folder_id
         self.cookies_path = cookies_path
         self.full_table_name = f"`{bq_project_id}.{bq_dataset_id}.{self.bq_table_id}`"
@@ -462,7 +463,7 @@ def main():
     logger.info(f"📁 Credentials path: {settings.GOOGLE_APPLICATION_CREDENTIALS}")
     logger.info(f"🏢 Project ID: {settings.BQ_PROJECT_ID}")
     logger.info(f"📊 Dataset ID: {settings.BQ_DATASET_ID}")
-    logger.info(f"📋 Table ID: {settings.BQ_TABLE_EVENTS}")
+    logger.info(f"📋 Table ID: {settings.BQ_TABLE_ID}")
     logger.info(f"📁 Cookies path: {settings.COOKIES_PATH}")
     logger.info(f"📁 Drive folder: {settings.GDRIVE_FOLDER_ID}")
     
@@ -484,7 +485,7 @@ def main():
             credentials_path=settings.GOOGLE_APPLICATION_CREDENTIALS,
             bq_project_id=settings.BQ_PROJECT_ID,
             bq_dataset_id=settings.BQ_DATASET_ID,
-            bq_table_id=settings.BQ_TABLE_EVENTS,
+            bq_table_id=settings.BQ_TABLE_ID,
             gdrive_folder_id=settings.GDRIVE_FOLDER_ID,
             cookies_path=settings.COOKIES_PATH
         )
