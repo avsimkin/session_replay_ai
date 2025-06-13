@@ -72,7 +72,41 @@ class BigQueryScreenshotCollector:
         self._init_google_drive()
         self._load_cookies()
 
-    # ... [Keep all the existing methods from your script, but replace print statements with logger.info/warning/error] ...
+    def _init_bigquery(self):
+        """Initialize BigQuery client"""
+        try:
+            credentials = service_account.Credentials.from_service_account_file(
+                self.credentials_path,
+                scopes=["https://www.googleapis.com/auth/bigquery"]
+            )
+            self.bq_client = bigquery.Client(credentials=credentials, project=self.bq_project_id)
+            logger.info("✅ BigQuery connected")
+        except Exception as e:
+            logger.error(f"❌ Error connecting to BigQuery: {e}")
+            raise
+
+    def _init_google_drive(self):
+        """Initialize Google Drive client"""
+        try:
+            credentials = service_account.Credentials.from_service_account_file(
+                self.credentials_path,
+                scopes=['https://www.googleapis.com/auth/drive']
+            )
+            self.drive_service = build('drive', 'v3', credentials=credentials)
+            logger.info("✅ Google Drive connected")
+        except Exception as e:
+            logger.error(f"❌ Error connecting to Google Drive: {e}")
+            raise
+
+    def _load_cookies(self):
+        """Load cookies from file"""
+        try:
+            with open(self.cookies_path, "r") as f:
+                self.cookies = json.load(f)
+            logger.info(f"✅ Cookies loaded from {self.cookies_path}")
+        except Exception as e:
+            logger.error(f"❌ Error loading cookies: {e}")
+            raise
 
     def run_automated(self):
         """Run the collector in automated mode"""
