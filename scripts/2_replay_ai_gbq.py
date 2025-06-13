@@ -116,6 +116,7 @@ class BigQueryScreenshotCollector:
         while True:
             try:
                 # Get unprocessed URLs
+                logger.info("🔍 Fetching unprocessed URLs from BigQuery...")
                 urls_data = self.get_unprocessed_urls()
                 if not urls_data:
                     logger.info("🎉 All URLs have been processed!")
@@ -125,8 +126,10 @@ class BigQueryScreenshotCollector:
                 batch_size = settings.BATCH_SIZE
                 total_urls = len(urls_data)
                 logger.info(f"📊 Found {total_urls} unprocessed URLs")
+                logger.info(f"⚙️ Processing in batches of {batch_size}")
 
                 with sync_playwright() as p:
+                    logger.info("🌐 Launching browser...")
                     browser_args = [
                         '--no-proxy-server',
                         '--disable-proxy-config-service',
@@ -138,15 +141,19 @@ class BigQueryScreenshotCollector:
                         '--disable-features=VizDisplayCompositor'
                     ]
                     browser = p.chromium.launch(headless=True, args=browser_args)
+                    logger.info("✅ Browser launched successfully")
 
                     for i in range(0, total_urls, batch_size):
                         batch_urls = urls_data[i:i + batch_size]
-                        logger.info(f"🔄 Processing batch {i//batch_size + 1}/{(total_urls + batch_size - 1)//batch_size}")
+                        current_batch = i//batch_size + 1
+                        total_batches = (total_urls + batch_size - 1)//batch_size
+                        logger.info(f"🔄 Processing batch {current_batch}/{total_batches} ({len(batch_urls)} URLs)")
 
                         for url_data in batch_urls:
                             retries = 0
                             while retries < settings.MAX_RETRIES:
                                 try:
+                                    logger.info(f"🔗 Processing URL: {url_data['url']}")
                                     user_agent = random.choice(USER_AGENTS)
                                     context = browser.new_context(
                                         user_agent=user_agent,
@@ -200,12 +207,15 @@ class BigQueryScreenshotCollector:
                             logger.info(f"⏸️ Pausing between batches for {pause_time:.1f} seconds...")
                             time.sleep(pause_time)
 
+                    logger.info("🌐 Closing browser...")
                     browser.close()
+                    logger.info("✅ Browser closed successfully")
 
             except Exception as e:
                 logger.error(f"❌ Critical error in automated processing: {str(e)}")
                 import traceback
                 logger.error(traceback.format_exc())
+                logger.info("⏳ Waiting 5 minutes before retrying...")
                 time.sleep(300)  # Wait 5 minutes before retrying
                 continue
 
@@ -213,7 +223,27 @@ class BigQueryScreenshotCollector:
 
 def main():
     """Main function"""
+    logger.info("🚀 Starting Session Replay Screenshot Collector")
+    logger.info("=" * 50)
+    logger.info(f"📁 Credentials path: {settings.GOOGLE_APPLICATION_CREDENTIALS}")
+    logger.info(f"🏢 Project ID: {settings.BQ_PROJECT_ID}")
+    logger.info(f"📊 Dataset ID: {settings.BQ_DATASET_ID}")
+    logger.info(f"📋 Table ID: {settings.BQ_TABLE_EVENTS}")
+    logger.info(f"📁 Cookies path: {settings.COOKIES_PATH}")
+    logger.info(f"📁 Drive folder: {settings.GDRIVE_FOLDER_ID}")
+    
     try:
+        # Check if credentials file exists
+        if not os.path.exists(settings.GOOGLE_APPLICATION_CREDENTIALS):
+            logger.error(f"❌ Credentials file not found: {settings.GOOGLE_APPLICATION_CREDENTIALS}")
+            return {"status": "error", "error": "Credentials file not found"}
+            
+        # Check if cookies file exists
+        if not os.path.exists(settings.COOKIES_PATH):
+            logger.error(f"❌ Cookies file not found: {settings.COOKIES_PATH}")
+            return {"status": "error", "error": "Cookies file not found"}
+
+        logger.info("🔐 Initializing BigQueryScreenshotCollector...")
         collector = BigQueryScreenshotCollector(
             credentials_path=settings.GOOGLE_APPLICATION_CREDENTIALS,
             bq_project_id=settings.BQ_PROJECT_ID,
@@ -222,12 +252,19 @@ def main():
             gdrive_folder_id=settings.GDRIVE_FOLDER_ID,
             cookies_path=settings.COOKIES_PATH
         )
+        
+        logger.info("▶️ Starting automated processing...")
         collector.run_automated()
+        
+        logger.info("✅ Script completed successfully")
+        return {"status": "success", "message": "Script completed successfully"}
+        
     except Exception as e:
         logger.error(f"❌ Critical error: {str(e)}")
         import traceback
         logger.error(traceback.format_exc())
-        sys.exit(1)
+        return {"status": "error", "error": str(e), "traceback": traceback.format_exc()}
 
 if __name__ == "__main__":
-    main()
+    result = main()
+    logger.info(f"📋 Final result: {result}")
