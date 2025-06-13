@@ -108,10 +108,10 @@ class BigQueryScreenshotCollector:
         self.credentials_path = credentials_path
         self.bq_project_id = bq_project_id
         self.bq_dataset_id = bq_dataset_id
-        self.bq_table_id = bq_table_id
+        self.bq_table_id = os.environ.get('BQ_TABLE_ID', bq_table_id or 'session_replay_urls')
         self.gdrive_folder_id = gdrive_folder_id
         self.cookies_path = cookies_path
-        self.full_table_name = f"`{bq_project_id}.{bq_dataset_id}.{bq_table_id}`"
+        self.full_table_name = f"`{bq_project_id}.{bq_dataset_id}.{self.bq_table_id}`"
 
         logger.info("🔐 Setting up connections...")
         self._init_bigquery()
