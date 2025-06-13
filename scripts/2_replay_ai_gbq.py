@@ -130,8 +130,41 @@ class BigQueryScreenshotCollector:
             )
             self.bq_client = bigquery.Client(credentials=credentials, project=self.bq_project_id)
             logger.info("✅ BigQuery connected")
+            
+            # Create processed_urls table if it doesn't exist
+            self._create_processed_urls_table()
+            
         except Exception as e:
             logger.error(f"❌ Error connecting to BigQuery: {e}")
+            raise
+
+    def _create_processed_urls_table(self):
+        """Create processed_urls table if it doesn't exist"""
+        try:
+            table_id = f"{self.bq_project_id}.{self.bq_dataset_id}.processed_urls"
+            
+            # Check if table exists
+            try:
+                self.bq_client.get_table(table_id)
+                logger.info("✅ processed_urls table already exists")
+                return
+            except Exception:
+                pass
+            
+            # Create table
+            schema = [
+                bigquery.SchemaField("url", "STRING", mode="REQUIRED"),
+                bigquery.SchemaField("processed_at", "TIMESTAMP", mode="REQUIRED"),
+                bigquery.SchemaField("success", "BOOLEAN", mode="REQUIRED")
+            ]
+            
+            table = bigquery.Table(table_id, schema=schema)
+            table = self.bq_client.create_table(table)
+            logger.info(f"✅ Created table {table_id}")
+            
+        except Exception as e:
+            logger.error(f"❌ Error creating processed_urls table: {e}")
+            logger.error(traceback.format_exc())
             raise
 
     def _init_google_drive(self):
@@ -158,6 +191,164 @@ class BigQueryScreenshotCollector:
             logger.info(f"✅ Cookies loaded from {self.cookies_path}")
         except Exception as e:
             logger.error(f"❌ Error loading cookies: {e}")
+            raise
+
+    def get_unprocessed_urls(self):
+        """Get unprocessed URLs from BigQuery"""
+        try:
+            query = f"""
+            SELECT DISTINCT
+                url,
+                session_id,
+                user_id,
+                event_time
+            FROM {self.full_table_name}
+            WHERE url IS NOT NULL
+            AND url NOT IN (
+                SELECT url 
+                FROM `{self.bq_project_id}.{self.bq_dataset_id}.processed_urls`
+            )
+            ORDER BY event_time DESC
+            LIMIT 100
+            """
+            
+            logger.info(f"🔍 Executing query: {query}")
+            query_job = self.bq_client.query(query)
+            results = query_job.result()
+            
+            urls_data = []
+            for row in results:
+                urls_data.append({
+                    'url': row.url,
+                    'session_id': row.session_id,
+                    'user_id': row.user_id,
+                    'event_time': row.event_time
+                })
+            
+            logger.info(f"✅ Found {len(urls_data)} unprocessed URLs")
+            return urls_data
+            
+        except Exception as e:
+            logger.error(f"❌ Error fetching unprocessed URLs: {e}")
+            logger.error(traceback.format_exc())
+            raise
+
+    def mark_url_as_processed(self, url, success):
+        """Mark URL as processed in BigQuery"""
+        try:
+            query = f"""
+            INSERT INTO `{self.bq_project_id}.{self.bq_dataset_id}.processed_urls`
+            (url, processed_at, success)
+            VALUES (@url, CURRENT_TIMESTAMP(), @success)
+            """
+            
+            job_config = bigquery.QueryJobConfig(
+                query_parameters=[
+                    bigquery.ScalarQueryParameter("url", "STRING", url),
+                    bigquery.ScalarQueryParameter("success", "BOOLEAN", success)
+                ]
+            )
+            
+            query_job = self.bq_client.query(query, job_config=job_config)
+            query_job.result()
+            logger.info(f"✅ Marked URL as processed: {url}")
+            
+        except Exception as e:
+            logger.error(f"❌ Error marking URL as processed: {e}")
+            logger.error(traceback.format_exc())
+            raise
+
+    def process_single_url(self, page, url_data, config):
+        """Process a single URL and take screenshots"""
+        try:
+            url = url_data['url']
+            logger.info(f"🌐 Opening URL: {url}")
+            
+            # Set timeout for page operations
+            page.set_default_timeout(settings.PLAYWRIGHT_TIMEOUT)
+            
+            # Navigate to URL
+            response = page.goto(url, wait_until='networkidle')
+            if not response:
+                logger.error(f"❌ Failed to load URL: {url}")
+                return False, []
+                
+            if response.status != 200:
+                logger.error(f"❌ Bad status code {response.status} for URL: {url}")
+                return False, []
+            
+            # Wait for page to be fully loaded
+            page.wait_for_load_state('networkidle')
+            
+            # Take screenshots
+            screenshots = []
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            session_id = url_data.get('session_id', 'unknown')
+            
+            # Create temp directory for screenshots
+            temp_dir = f"temp_session_{session_id}"
+            os.makedirs(temp_dir, exist_ok=True)
+            
+            try:
+                # Take full page screenshot
+                screenshot_path = f"{temp_dir}/full_{timestamp}.png"
+                page.screenshot(path=screenshot_path, full_page=True)
+                screenshots.append(screenshot_path)
+                
+                # Take viewport screenshot
+                viewport_path = f"{temp_dir}/viewport_{timestamp}.png"
+                page.screenshot(path=viewport_path)
+                screenshots.append(viewport_path)
+                
+                # Upload to Google Drive
+                for screenshot in screenshots:
+                    self.upload_to_drive(screenshot, session_id)
+                
+                return True, screenshots
+                
+            finally:
+                # Cleanup temp files
+                for screenshot in screenshots:
+                    try:
+                        os.remove(screenshot)
+                    except Exception as e:
+                        logger.error(f"Error removing temp file {screenshot}: {e}")
+                try:
+                    os.rmdir(temp_dir)
+                except Exception as e:
+                    logger.error(f"Error removing temp directory {temp_dir}: {e}")
+                    
+        except Exception as e:
+            logger.error(f"❌ Error processing URL {url}: {e}")
+            logger.error(traceback.format_exc())
+            return False, []
+
+    def upload_to_drive(self, file_path, session_id):
+        """Upload file to Google Drive"""
+        try:
+            file_metadata = {
+                'name': os.path.basename(file_path),
+                'parents': [self.gdrive_folder_id],
+                'description': f'Session ID: {session_id}'
+            }
+            
+            media = MediaFileUpload(
+                file_path,
+                mimetype='image/png',
+                resumable=True
+            )
+            
+            file = self.drive_service.files().create(
+                body=file_metadata,
+                media_body=media,
+                fields='id'
+            ).execute()
+            
+            logger.info(f"✅ Uploaded {file_path} to Drive (ID: {file.get('id')})")
+            
+        except Exception as e:
+            logger.error(f"❌ Error uploading to Drive: {e}")
+            logger.error(traceback.format_exc())
             raise
 
     def run_automated(self):
