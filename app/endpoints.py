@@ -21,18 +21,46 @@ def run_script_safe(script_path: str, script_name: str) -> Dict[str, Any]:
         if not os.path.exists(script_path):
             raise FileNotFoundError(f"Скрипт не найден: {script_path}")
         
-        # Запускаем скрипт
-        result = subprocess.run(
-            [sys.executable, script_path], 
-            capture_output=True, 
-            text=True, 
-            timeout=1800  # 30 минут максимум
+        # Запускаем скрипт с перенаправлением вывода
+        process = subprocess.Popen(
+            [sys.executable, script_path],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            bufsize=1,
+            universal_newlines=True
         )
+        
+        # Читаем вывод в реальном времени
+        stdout_lines = []
+        stderr_lines = []
+        
+        while True:
+            stdout_line = process.stdout.readline()
+            stderr_line = process.stderr.readline()
+            
+            if stdout_line:
+                print(stdout_line.strip())  # Печатаем в stdout
+                stdout_lines.append(stdout_line)
+            if stderr_line:
+                print(stderr_line.strip(), file=sys.stderr)  # Печатаем в stderr
+                stderr_lines.append(stderr_line)
+                
+            # Проверяем, завершился ли процесс
+            if process.poll() is not None:
+                # Читаем оставшийся вывод
+                for line in process.stdout:
+                    print(line.strip())
+                    stdout_lines.append(line)
+                for line in process.stderr:
+                    print(line.strip(), file=sys.stderr)
+                    stderr_lines.append(line)
+                break
         
         end_time = datetime.now()
         duration = (end_time - start_time).total_seconds()
         
-        if result.returncode == 0:
+        if process.returncode == 0:
             logger.info(f"Скрипт {script_name} выполнен успешно за {duration:.1f} сек")
             return {
                 "status": "success",
@@ -40,19 +68,19 @@ def run_script_safe(script_path: str, script_name: str) -> Dict[str, Any]:
                 "duration_seconds": duration,
                 "start_time": start_time.isoformat(),
                 "end_time": end_time.isoformat(),
-                "stdout": result.stdout[-1000:],  # Последние 1000 символов
+                "stdout": "".join(stdout_lines[-1000:]),  # Последние 1000 строк
                 "message": f"Скрипт выполнен успешно за {duration:.1f} сек"
             }
         else:
-            logger.error(f"Ошибка в скрипте {script_name}: {result.stderr}")
+            logger.error(f"Ошибка в скрипте {script_name}: {''.join(stderr_lines)}")
             return {
                 "status": "error",
                 "script": script_name,
                 "duration_seconds": duration,
                 "start_time": start_time.isoformat(),
                 "end_time": end_time.isoformat(),
-                "stdout": result.stdout[-500:],
-                "stderr": result.stderr[-500:],
+                "stdout": "".join(stdout_lines[-500:]),
+                "stderr": "".join(stderr_lines[-500:]),
                 "message": f"Скрипт завершился с ошибкой"
             }
             
