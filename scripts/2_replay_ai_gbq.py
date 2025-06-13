@@ -5,8 +5,10 @@ import time
 import hashlib
 import random
 import logging
+import traceback
 from datetime import datetime
-from playwright.sync_api import sync_playwright
+from contextlib import contextmanager
+from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
 from google.cloud import bigquery
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
@@ -16,12 +18,22 @@ import zipfile
 # Add project root to path for config import
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+# Configure logging to stdout for cloud environments
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler(sys.stdout)  # Use stdout for cloud environments
+    ]
+)
+logger = logging.getLogger(__name__)
+
 # Import settings or use environment variables
 try:
     from config.settings import settings
-    print("✅ Using config.settings")
+    logger.info("✅ Using config.settings")
 except ImportError:
-    print("⚠️ config.settings not available, using environment variables")
+    logger.info("⚠️ config.settings not available, using environment variables")
     class MockSettings:
         GOOGLE_APPLICATION_CREDENTIALS = os.environ.get('GOOGLE_APPLICATION_CREDENTIALS', '/etc/secrets/bigquery-credentials.json')
         BQ_PROJECT_ID = os.environ.get('BQ_PROJECT_ID', 'codellon-dwh')
@@ -35,19 +47,9 @@ except ImportError:
         BATCH_PAUSE_MIN = int(os.environ.get('BATCH_PAUSE_MIN', '30'))
         BATCH_PAUSE_MAX = int(os.environ.get('BATCH_PAUSE_MAX', '60'))
         MAX_RETRIES = int(os.environ.get('MAX_RETRIES', '3'))
+        PLAYWRIGHT_TIMEOUT = int(os.environ.get('PLAYWRIGHT_TIMEOUT', '30000'))
     
     settings = MockSettings()
-
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.StreamHandler(),
-        logging.FileHandler('session_replay_processor.log')
-    ]
-)
-logger = logging.getLogger(__name__)
 
 USER_AGENTS = [
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -55,6 +57,50 @@ USER_AGENTS = [
     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36",
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:120.0) Gecko/20100101 Firefox/120.0"
 ]
+
+@contextmanager
+def browser_context(playwright, user_agent, cookies):
+    """Context manager for browser operations"""
+    browser = None
+    context = None
+    try:
+        browser_args = [
+            '--no-sandbox',
+            '--disable-setuid-sandbox',
+            '--disable-dev-shm-usage',
+            '--disable-accelerated-2d-canvas',
+            '--disable-gpu',
+            '--window-size=1366,768',
+        ]
+        browser = playwright.chromium.launch(
+            headless=True,
+            args=browser_args
+        )
+        context = browser.new_context(
+            user_agent=user_agent,
+            viewport={'width': 1366, 'height': 768},
+            locale='en-US',
+            timezone_id='America/New_York'
+        )
+        context.add_init_script("""
+            Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
+            window.navigator.chrome = { runtime: {} };
+            Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
+            Object.defineProperty(navigator, 'plugins', {get: () => [1, 2, 3, 4, 5]});
+        """)
+        context.add_cookies(cookies)
+        yield context
+    finally:
+        if context:
+            try:
+                context.close()
+            except Exception as e:
+                logger.error(f"Error closing context: {e}")
+        if browser:
+            try:
+                browser.close()
+            except Exception as e:
+                logger.error(f"Error closing browser: {e}")
 
 class BigQueryScreenshotCollector:
     def __init__(self, credentials_path, bq_project_id, bq_dataset_id, bq_table_id,
@@ -75,6 +121,9 @@ class BigQueryScreenshotCollector:
     def _init_bigquery(self):
         """Initialize BigQuery client"""
         try:
+            if not os.path.exists(self.credentials_path):
+                raise FileNotFoundError(f"Credentials file not found: {self.credentials_path}")
+                
             credentials = service_account.Credentials.from_service_account_file(
                 self.credentials_path,
                 scopes=["https://www.googleapis.com/auth/bigquery"]
@@ -101,6 +150,9 @@ class BigQueryScreenshotCollector:
     def _load_cookies(self):
         """Load cookies from file"""
         try:
+            if not os.path.exists(self.cookies_path):
+                raise FileNotFoundError(f"Cookies file not found: {self.cookies_path}")
+                
             with open(self.cookies_path, "r") as f:
                 self.cookies = json.load(f)
             logger.info(f"✅ Cookies loaded from {self.cookies_path}")
@@ -113,113 +165,90 @@ class BigQueryScreenshotCollector:
         logger.info("🚀 Starting automated Session Replay processing")
         logger.info("=" * 50)
 
-        while True:
-            try:
-                # Get unprocessed URLs
-                logger.info("🔍 Fetching unprocessed URLs from BigQuery...")
-                urls_data = self.get_unprocessed_urls()
-                if not urls_data:
-                    logger.info("🎉 All URLs have been processed!")
-                    break
+        try:
+            # Get unprocessed URLs
+            logger.info("🔍 Fetching unprocessed URLs from BigQuery...")
+            urls_data = self.get_unprocessed_urls()
+            if not urls_data:
+                logger.info("🎉 All URLs have been processed!")
+                return {"status": "success", "message": "No URLs to process"}
 
-                # Process in batches
-                batch_size = settings.BATCH_SIZE
-                total_urls = len(urls_data)
-                logger.info(f"📊 Found {total_urls} unprocessed URLs")
-                logger.info(f"⚙️ Processing in batches of {batch_size}")
+            # Process in batches
+            batch_size = settings.BATCH_SIZE
+            total_urls = len(urls_data)
+            logger.info(f"📊 Found {total_urls} unprocessed URLs")
+            logger.info(f"⚙️ Processing in batches of {batch_size}")
 
-                with sync_playwright() as p:
-                    logger.info("🌐 Launching browser...")
-                    browser_args = [
-                        '--no-proxy-server',
-                        '--disable-proxy-config-service',
-                        '--no-sandbox',
-                        '--disable-setuid-sandbox',
-                        '--disable-blink-features=AutomationControlled',
-                        '--disable-dev-shm-usage',
-                        '--disable-web-security',
-                        '--disable-features=VizDisplayCompositor'
-                    ]
-                    browser = p.chromium.launch(headless=True, args=browser_args)
-                    logger.info("✅ Browser launched successfully")
+            with sync_playwright() as p:
+                for i in range(0, total_urls, batch_size):
+                    batch_urls = urls_data[i:i + batch_size]
+                    current_batch = i//batch_size + 1
+                    total_batches = (total_urls + batch_size - 1)//batch_size
+                    logger.info(f"🔄 Processing batch {current_batch}/{total_batches} ({len(batch_urls)} URLs)")
 
-                    for i in range(0, total_urls, batch_size):
-                        batch_urls = urls_data[i:i + batch_size]
-                        current_batch = i//batch_size + 1
-                        total_batches = (total_urls + batch_size - 1)//batch_size
-                        logger.info(f"🔄 Processing batch {current_batch}/{total_batches} ({len(batch_urls)} URLs)")
-
-                        for url_data in batch_urls:
-                            retries = 0
-                            while retries < settings.MAX_RETRIES:
-                                try:
-                                    logger.info(f"🔗 Processing URL: {url_data['url']}")
-                                    user_agent = random.choice(USER_AGENTS)
-                                    context = browser.new_context(
-                                        user_agent=user_agent,
-                                        viewport={'width': 1366, 'height': 768},
-                                        locale='en-US',
-                                        timezone_id='America/New_York'
-                                    )
-                                    context.add_init_script("""
-                                        Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
-                                        window.navigator.chrome = { runtime: {} };
-                                        Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
-                                        Object.defineProperty(navigator, 'plugins', {get: () => [1, 2, 3, 4, 5]});
-                                    """)
-                                    context.add_cookies(self.cookies)
+                    for url_data in batch_urls:
+                        retries = 0
+                        while retries < settings.MAX_RETRIES:
+                            try:
+                                logger.info(f"🔗 Processing URL: {url_data['url']}")
+                                user_agent = random.choice(USER_AGENTS)
+                                
+                                with browser_context(p, user_agent, self.cookies) as context:
                                     page = context.new_page()
-
-                                    success, screenshots = self.process_single_url(page, url_data, {
-                                        'min_delay': settings.MIN_DELAY,
-                                        'max_delay': settings.MAX_DELAY,
-                                        'batch_size': settings.BATCH_SIZE,
-                                        'batch_pause_min': settings.BATCH_PAUSE_MIN,
-                                        'batch_pause_max': settings.BATCH_PAUSE_MAX,
-                                        'name': 'AUTOMATED'
-                                    })
-
-                                    self.mark_url_as_processed(url_data['url'], success)
-                                    page.close()
-                                    context.close()
-
-                                    if success:
-                                        logger.info(f"✅ Successfully processed URL: {url_data['url']}")
-                                        break
-                                    else:
+                                    try:
+                                        success, screenshots = self.process_single_url(page, url_data, {
+                                            'min_delay': settings.MIN_DELAY,
+                                            'max_delay': settings.MAX_DELAY,
+                                            'batch_size': settings.BATCH_SIZE,
+                                            'batch_pause_min': settings.BATCH_PAUSE_MIN,
+                                            'batch_pause_max': settings.BATCH_PAUSE_MAX,
+                                            'name': 'AUTOMATED'
+                                        })
+                                        self.mark_url_as_processed(url_data['url'], success)
+                                        
+                                        if success:
+                                            logger.info(f"✅ Successfully processed URL: {url_data['url']}")
+                                            break
+                                        else:
+                                            retries += 1
+                                            if retries < settings.MAX_RETRIES:
+                                                logger.warning(f"⚠️ Retry {retries}/{settings.MAX_RETRIES} for URL: {url_data['url']}")
+                                                time.sleep(random.uniform(5, 10))
+                                            else:
+                                                logger.error(f"❌ Failed to process URL after {settings.MAX_RETRIES} retries: {url_data['url']}")
+                                    except PlaywrightTimeoutError as e:
+                                        logger.error(f"❌ Timeout error processing URL: {e}")
                                         retries += 1
                                         if retries < settings.MAX_RETRIES:
-                                            logger.warning(f"⚠️ Retry {retries}/{settings.MAX_RETRIES} for URL: {url_data['url']}")
                                             time.sleep(random.uniform(5, 10))
-                                        else:
-                                            logger.error(f"❌ Failed to process URL after {settings.MAX_RETRIES} retries: {url_data['url']}")
+                                        continue
+                                    finally:
+                                        try:
+                                            page.close()
+                                        except Exception as e:
+                                            logger.error(f"Error closing page: {e}")
 
-                                except Exception as e:
-                                    logger.error(f"❌ Error processing URL: {str(e)}")
-                                    retries += 1
-                                    if retries < settings.MAX_RETRIES:
-                                        time.sleep(random.uniform(5, 10))
-                                    continue
+                            except Exception as e:
+                                logger.error(f"❌ Error processing URL: {str(e)}")
+                                retries += 1
+                                if retries < settings.MAX_RETRIES:
+                                    time.sleep(random.uniform(5, 10))
+                                continue
 
-                        # Pause between batches
-                        if i + batch_size < total_urls:
-                            pause_time = random.uniform(settings.BATCH_PAUSE_MIN, settings.BATCH_PAUSE_MAX)
-                            logger.info(f"⏸️ Pausing between batches for {pause_time:.1f} seconds...")
-                            time.sleep(pause_time)
+                    # Pause between batches
+                    if i + batch_size < total_urls:
+                        pause_time = random.uniform(settings.BATCH_PAUSE_MIN, settings.BATCH_PAUSE_MAX)
+                        logger.info(f"⏸️ Pausing between batches for {pause_time:.1f} seconds...")
+                        time.sleep(pause_time)
 
-                    logger.info("🌐 Closing browser...")
-                    browser.close()
-                    logger.info("✅ Browser closed successfully")
+            logger.info("🎉 Automated processing completed!")
+            return {"status": "success", "message": "Processing completed successfully"}
 
-            except Exception as e:
-                logger.error(f"❌ Critical error in automated processing: {str(e)}")
-                import traceback
-                logger.error(traceback.format_exc())
-                logger.info("⏳ Waiting 5 minutes before retrying...")
-                time.sleep(300)  # Wait 5 minutes before retrying
-                continue
-
-        logger.info("🎉 Automated processing completed!")
+        except Exception as e:
+            error_msg = f"❌ Critical error in automated processing: {str(e)}"
+            logger.error(error_msg)
+            logger.error(traceback.format_exc())
+            return {"status": "error", "error": error_msg, "traceback": traceback.format_exc()}
 
 def main():
     """Main function"""
@@ -235,13 +264,15 @@ def main():
     try:
         # Check if credentials file exists
         if not os.path.exists(settings.GOOGLE_APPLICATION_CREDENTIALS):
-            logger.error(f"❌ Credentials file not found: {settings.GOOGLE_APPLICATION_CREDENTIALS}")
-            return {"status": "error", "error": "Credentials file not found"}
+            error_msg = f"❌ Credentials file not found: {settings.GOOGLE_APPLICATION_CREDENTIALS}"
+            logger.error(error_msg)
+            return {"status": "error", "error": error_msg}
             
         # Check if cookies file exists
         if not os.path.exists(settings.COOKIES_PATH):
-            logger.error(f"❌ Cookies file not found: {settings.COOKIES_PATH}")
-            return {"status": "error", "error": "Cookies file not found"}
+            error_msg = f"❌ Cookies file not found: {settings.COOKIES_PATH}"
+            logger.error(error_msg)
+            return {"status": "error", "error": error_msg}
 
         logger.info("🔐 Initializing BigQueryScreenshotCollector...")
         collector = BigQueryScreenshotCollector(
@@ -254,16 +285,15 @@ def main():
         )
         
         logger.info("▶️ Starting automated processing...")
-        collector.run_automated()
-        
-        logger.info("✅ Script completed successfully")
-        return {"status": "success", "message": "Script completed successfully"}
+        result = collector.run_automated()
+        logger.info(f"📋 Processing result: {result}")
+        return result
         
     except Exception as e:
-        logger.error(f"❌ Critical error: {str(e)}")
-        import traceback
+        error_msg = f"❌ Critical error: {str(e)}"
+        logger.error(error_msg)
         logger.error(traceback.format_exc())
-        return {"status": "error", "error": str(e), "traceback": traceback.format_exc()}
+        return {"status": "error", "error": error_msg, "traceback": traceback.format_exc()}
 
 if __name__ == "__main__":
     result = main()
