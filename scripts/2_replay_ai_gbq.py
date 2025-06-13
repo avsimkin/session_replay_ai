@@ -134,8 +134,8 @@ class BigQueryScreenshotCollector:
                 location='US'  # Explicitly set location to US
             )
             
-            # Test connection
-            self.bq_client.get_project()
+            # Проверка соединения: просто запросим список датасетов
+            list(self.bq_client.list_datasets())
             logger.info("✅ BigQuery connected")
             
             # Create processed_urls table if it doesn't exist
