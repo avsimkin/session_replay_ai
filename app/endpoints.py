@@ -10,9 +10,8 @@ from typing import Dict, Any
 # Импортируем общее состояние из app.state
 from app.state import task_statuses
 
-# Импортируем логику нашего скрипта
-# Этот импорт сработает, так как мы создали app/__init__.py
-from scripts.s2_replay_ai_gbq import RenderScreenshotCollector
+# ИСПРАВЛЕННЫЙ ИМПОРТ: используем новое имя файла
+from scripts.replay_screenshots import RenderScreenshotCollector
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -28,8 +27,8 @@ def run_script_safe(script_path: str, script_name: str) -> Dict[str, Any]:
             [sys.executable, script_path],
             capture_output=True,
             text=True,
-            check=False, # Не выбрасывать исключение при ошибке
-            timeout=1800 # 30 минут на выполнение
+            check=False,
+            timeout=1800
         )
         
         if process.returncode == 0:
@@ -104,6 +103,7 @@ async def run_replay_screenshots_tracked(background_tasks: BackgroundTasks):
 @router.post("/scripts/collect-links", summary="🔗 Сбор ссылок", tags=["🔧 Scripts Management"])
 async def run_collect_links(background_tasks: BackgroundTasks):
     """Запуск сборщика ссылок (без детального отслеживания)."""
-    script_path = "scripts/1_collect_links_put_gbq.py"
+    # ИСПОЛЬЗУЕМ НОВОЕ ИМЯ ФАЙЛА
+    script_path = "scripts/collect_links.py"
     background_tasks.add_task(run_script_safe, script_path, "Collect Links")
     return {"message": "Скрипт 'Collect Links' добавлен в очередь выполнения."}

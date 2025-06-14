@@ -1,4 +1,4 @@
-from fastapi import FastAPI, BackgroundTasks, HTTPException
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 import schedule
@@ -30,14 +30,13 @@ def run_daily_analytics_pipeline():
     """Ежедневный запуск полного пайплайна аналитики"""
     logger.info("🚀 Запуск ежедневного пайплайна аналитики")
     
+    # ИСПОЛЬЗУЕМ НОВЫЕ ИМЕНА ФАЙЛОВ
     pipeline_steps = [
-        ("scripts/1_collect_links_put_gbq.py", "Сбор Session Replay ссылок"),
-        # Примечание: для автоматического пайплайна пока используется старый метод запуска.
-        # Для отслеживания прогресса нужно будет интегрировать новую систему и сюда.
-        ("scripts/2_replay_ai_gbq.py", "Создание скриншотов"),
-        ("scripts/3_collect_replay_screens.py", "Извлечение текста"),
-        ("scripts/4_get_clasters_gbq.py", "Кластеризация данных"),
-        ("scripts/5_summarazing.py", "Создание саммари")
+        ("scripts/collect_links.py", "Сбор Session Replay ссылок"),
+        ("scripts/replay_screenshots.py", "Создание скриншотов"),
+        # ("scripts/extract_text.py", "Извлечение текста"), # Пример для будущих скриптов
+        # ("scripts/get_clusters.py", "Кластеризация данных"), # Пример для будущих скриптов
+        # ("scripts/summarize.py", "Создание саммари") # Пример для будущих скриптов
     ]
     
     for script_path, step_name in pipeline_steps:
@@ -73,7 +72,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="📊 Analytics Scripts API",
     description="Система автоматизации аналитических скриптов.",
-    version="1.1.0",
+    version="1.2.0",
     lifespan=lifespan,
     docs_url="/docs",
     redoc_url="/redoc"
@@ -103,14 +102,10 @@ async def root():
     return {
         "service": "Analytics Scripts API",
         "status": "running",
-        "endpoints": {
-            "docs": "/docs",
-            "track_task": "/api/task-status/{task_id}"
-        }
+        "version": "1.2.0"
     }
 
 if __name__ == "__main__":
     import uvicorn
     port = int(os.environ.get("PORT", 8000))
-    # Для локальной разработки удобно использовать reload=True
     uvicorn.run("main:app", host="0.0.0.0", port=port, reload=True)
