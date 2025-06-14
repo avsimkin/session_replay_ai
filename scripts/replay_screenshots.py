@@ -10,8 +10,12 @@ import tempfile
 import shutil
 from typing import Callable, Optional
 
+# ИСПРАВЛЕНИЕ: Добавляем недостающий импорт
+from google.oauth2 import service_account
+from googleapiclient.discovery import build
+from googleapiclient.http import MediaFileUpload
+
 # --- Настройки и Константы ---
-# Этот блок без изменений
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 try:
     from config.settings import settings
@@ -94,29 +98,24 @@ class RenderScreenshotCollector:
         session_dir = tempfile.mkdtemp(prefix=f"session_{session_id}_")
         
         try:
-            # УЛУЧШЕНИЕ: Ждем полной загрузки сети, таймаут 90 секунд
             self._update_status("Переход на страницу и ожидание полной загрузки...", -1)
             page.goto(url, timeout=90000, wait_until='networkidle')
 
-            # УЛУЧШЕНИЕ: Даем дополнительное время на рендер JS-фреймворков
             self._update_status("Дополнительное ожидание рендера...", -1)
             time.sleep(5)
             
-            # Проверяем на страницу логина
             if page.locator('input[type="email"]').is_visible():
                 raise PlaywrightError("Обнаружена страница входа. Проверьте COOKIES.")
 
-            # УЛУЧШЕНИЕ: Более надежный клик с увеличенным таймаутом
             summary_tab = page.locator("text=Summary").first
             self._update_status("Поиск вкладки 'Summary'...", -1)
             summary_tab.wait_for(state='visible', timeout=20000)
             summary_tab.click()
             self._update_status("Клик на 'Summary', ожидание загрузки контента...", -1)
-            time.sleep(10) # Увеличим ожидание после клика
+            time.sleep(10)
 
             screenshot_paths = []
             
-            # Скриншот блока с информацией
             userinfo_element = page.locator('.cerulean-cardbase').first
             userinfo_element.wait_for(state='visible', timeout=15000)
             userinfo_path = os.path.join(session_dir, f"{session_id}_userinfo.png")
@@ -124,9 +123,8 @@ class RenderScreenshotCollector:
             screenshot_paths.append(userinfo_path)
             self._update_status("✅ Скриншот 'User Info' сделан.", -1)
 
-            # Скриншот блока Summary
             summary_element = page.locator('p.ltext-_uoww22').first
-            summary_element.wait_for(state='visible', timeout=30000) # Даем 30 секунд
+            summary_element.wait_for(state='visible', timeout=30000)
             summary_path = os.path.join(session_dir, f"{session_id}_summary.png")
             summary_element.screenshot(path=summary_path)
             screenshot_paths.append(summary_path)
