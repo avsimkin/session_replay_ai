@@ -1,4 +1,3 @@
-Адаптированный скрипт для Render
 import json
 import os
 import time
