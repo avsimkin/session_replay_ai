@@ -134,21 +134,38 @@ async def run_collect_links(background_tasks: BackgroundTasks, sync: bool = Fals
     else:
         return await run_script_background(script_path, "Collect Links", background_tasks)
 
-@router.post("/scripts/screenshots", 
-            summary="📸 Создание скриншотов",
-            description="Автоматизированное создание скриншотов Session Replay через Playwright",
-            tags=["🔧 Scripts Management"])
+@router.post(
+    "/scripts/screenshots",
+    summary="📸 Создание скриншотов",
+    description="Автоматизированное создание скриншотов Session Replay через Playwright",
+    tags=["🔧 Scripts Management"]
+)
 async def run_replay_screenshots(background_tasks: BackgroundTasks, sync: bool = False):
     """Запуск сборщика скриншотов Session Replay"""
     script_path = "scripts/2_replay_ai_gbq.py"
-    
-    if sync:
-        result = run_script_safe(script_path, "Replay Screenshots")
-        if result["status"] == "error":
-            raise HTTPException(status_code=500, detail=result)
-        return result
-    else:
-        return await run_script_background(script_path, "Replay Screenshots", background_tasks)
+    print("DEBUG: Вызвана ручка /scripts/screenshots")
+    print(f"DEBUG: sync = {sync}")
+    print(f"DEBUG: script_path = {script_path}")
+
+    try:
+        if sync:
+            print("DEBUG: Запускаем run_script_safe")
+            result = run_script_safe(script_path, "Replay Screenshots")
+            print(f"DEBUG: run_script_safe вернул: {result}")
+            if result["status"] == "error":
+                print(f"❌ Ошибка в run_script_safe: {result}")
+                raise HTTPException(status_code=500, detail=result)
+            return result
+        else:
+            print("DEBUG: Запускаем run_script_background")
+            result = await run_script_background(script_path, "Replay Screenshots", background_tasks)
+            print(f"DEBUG: run_script_background вернул: {result}")
+            return result
+    except Exception as e:
+        print(f"❌ Ошибка при запуске скрипта: {e}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/scripts/extract-text", 
             summary="📄 Извлечение текста",
