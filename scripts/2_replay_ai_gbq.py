@@ -114,6 +114,7 @@ class RenderScreenshotCollector:
 
     def get_unprocessed_urls(self):
         """Получение необработанных URL с лимитом"""
+        print(f"DEBUG: get_unprocessed_urls, лимит = {self.processing_limit}")
         query = f"""
         SELECT 
             session_replay_url,
@@ -453,6 +454,8 @@ class RenderScreenshotCollector:
         print("🚀 RENDER SCREENSHOT COLLECTOR")
         print("BigQuery → Screenshots → Google Drive")
         print("=" * 50)
+        print(f"DEBUG: PROCESSING_LIMIT = {self.processing_limit}")
+        print("DEBUG: СТАРТУЕТ СКРИПТ СОБИРАТЕЛЯ СКРИНШОТОВ")
         
         # Получаем URL для обработки
         urls_data = self.get_unprocessed_urls()
