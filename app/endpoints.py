@@ -5,23 +5,27 @@ import os
 import logging
 from datetime import datetime
 import sys
+import uuid # Добавляем для генерации ID задач
 from typing import Dict, Any, Optional
+
+# --- ИЗМЕНЕНИЕ: Импортируем хранилище из main и логику скрипта ---
+from main import task_statuses
+# Примечание: убедитесь, что ваш скрипт называется '2_replay_ai_gbq.py' и находится в папке 'scripts'
+from scripts.s2_replay_ai_gbq import RenderScreenshotCollector 
+# -----------------------------------------------------------------
 
 # Основной роутер
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
 def run_script_safe(script_path: str, script_name: str) -> Dict[str, Any]:
-    """Безопасный запуск скрипта с обработкой ошибок"""
+    """Безопасный запуск скрипта (остаётся для других скриптов)."""
     start_time = datetime.now()
     try:
-        logger.info(f"Запуск скрипта: {script_name}")
-        
-        # Проверяем существование скрипта
+        logger.info(f"Запуск скрипта через subprocess: {script_name}")
         if not os.path.exists(script_path):
             raise FileNotFoundError(f"Скрипт не найден: {script_path}")
         
-        # Запускаем скрипт с перенаправлением вывода
         process = subprocess.Popen(
             [sys.executable, script_path],
             stdout=subprocess.PIPE,
@@ -30,142 +34,99 @@ def run_script_safe(script_path: str, script_name: str) -> Dict[str, Any]:
             bufsize=1,
             universal_newlines=True
         )
-        
-        # Читаем вывод в реальном времени
-        stdout_lines = []
-        stderr_lines = []
-        
-        while True:
-            stdout_line = process.stdout.readline()
-            stderr_line = process.stderr.readline()
-            
-            if stdout_line:
-                print(stdout_line.strip())  # Печатаем в stdout
-                stdout_lines.append(stdout_line)
-            if stderr_line:
-                print(stderr_line.strip(), file=sys.stderr)  # Печатаем в stderr
-                stderr_lines.append(stderr_line)
-                
-            # Проверяем, завершился ли процесс
-            if process.poll() is not None:
-                # Читаем оставшийся вывод
-                for line in process.stdout:
-                    print(line.strip())
-                    stdout_lines.append(line)
-                for line in process.stderr:
-                    print(line.strip(), file=sys.stderr)
-                    stderr_lines.append(line)
-                break
-        
+        stdout, stderr = process.communicate()
         end_time = datetime.now()
         duration = (end_time - start_time).total_seconds()
         
         if process.returncode == 0:
             logger.info(f"Скрипт {script_name} выполнен успешно за {duration:.1f} сек")
-            return {
-                "status": "success",
-                "script": script_name,
-                "duration_seconds": duration,
-                "start_time": start_time.isoformat(),
-                "end_time": end_time.isoformat(),
-                "stdout": "".join(stdout_lines[-1000:]),  # Последние 1000 строк
-                "message": f"Скрипт выполнен успешно за {duration:.1f} сек"
-            }
+            return {"status": "success", "script": script_name, "duration_seconds": duration}
         else:
-            logger.error(f"Ошибка в скрипте {script_name}: {''.join(stderr_lines)}")
-            return {
-                "status": "error",
-                "script": script_name,
-                "duration_seconds": duration,
-                "start_time": start_time.isoformat(),
-                "end_time": end_time.isoformat(),
-                "stdout": "".join(stdout_lines[-500:]),
-                "stderr": "".join(stderr_lines[-500:]),
-                "message": f"Скрипт завершился с ошибкой"
-            }
+            logger.error(f"Ошибка в скрипте {script_name}: {stderr}")
+            return {"status": "error", "script": script_name, "error": stderr}
             
-    except subprocess.TimeoutExpired:
-        logger.error(f"Таймаут скрипта {script_name}")
-        return {
-            "status": "timeout",
-            "script": script_name,
-            "duration_seconds": 1800,
-            "message": "Скрипт превысил лимит времени выполнения (30 мин)"
-        }
     except Exception as e:
-        end_time = datetime.now()
-        duration = (end_time - start_time).total_seconds()
-        logger.error(f"Критическая ошибка в скрипте {script_name}: {str(e)}")
-        return {
-            "status": "critical_error",
-            "script": script_name,
-            "duration_seconds": duration,
-            "error": str(e),
-            "message": f"Критическая ошибка: {str(e)}"
-        }
+        logger.error(f"Критическая ошибка при запуске скрипта {script_name}: {str(e)}")
+        return {"status": "critical_error", "script": script_name, "error": str(e)}
 
-async def run_script_background(script_path: str, script_name: str, background_tasks: BackgroundTasks):
-    """Запуск скрипта в фоне"""
-    def execute_script():
-        return run_script_safe(script_path, script_name)
-    
-    background_tasks.add_task(execute_script)
-    return {
-        "message": f"Скрипт {script_name} добавлен в очередь выполнения",
-        "status": "queued",
-        "script": script_name
+# --- НОВОЕ: Функция-обёртка для запуска сборщика скриншотов ---
+def run_screenshot_task(task_id: str):
+    """
+    Запускает сборщик скриншотов и обновляет статус задачи.
+    """
+    logger.info(f"🚀 Запуск задачи сбора скриншотов, ID: {task_id}")
+    task_statuses[task_id] = {
+        "status": "running",
+        "progress": 0,
+        "details": "Инициализация...",
+        "start_time": datetime.now().isoformat(),
+        "end_time": None,
+        "result": None
     }
+
+    def status_callback(details: str, progress: int):
+        """Callback-функция для обновления прогресса изнутри скрипта."""
+        if task_id in task_statuses:
+            task_statuses[task_id]["details"] = details
+            task_statuses[task_id]["progress"] = progress
+            logger.info(f"Задача {task_id}: [{progress}%] {details}")
+
+    try:
+        collector = RenderScreenshotCollector(status_callback=status_callback)
+        result = collector.run()
+        
+        task_statuses[task_id].update({
+            "status": "completed",
+            "progress": 100,
+            "details": "Задача успешно завершена.",
+            "end_time": datetime.now().isoformat(),
+            "result": result
+        })
+
+    except Exception as e:
+        error_message = f"Критическая ошибка в задаче: {str(e)}"
+        logger.error(f"ID задачи {task_id}: {error_message}", exc_info=True)
+        task_statuses[task_id].update({
+            "status": "failed",
+            "details": error_message,
+            "end_time": datetime.now().isoformat()
+        })
+# -----------------------------------------------------------
 
 # === SCRIPTS MANAGEMENT ENDPOINTS ===
 
-@router.post("/scripts/collect-links", 
-            summary="🔗 Сбор Session Replay ссылок",
-            description="Извлечение Session Replay ID из BigQuery и формирование ссылок",
-            tags=["🔧 Scripts Management"])
-async def run_collect_links(background_tasks: BackgroundTasks, sync: bool = False):
-    """Запуск сборщика Session Replay ссылок из BigQuery"""
+@router.post("/scripts/collect-links", summary="🔗 Сбор Session Replay ссылок", tags=["🔧 Scripts Management"])
+async def run_collect_links(background_tasks: BackgroundTasks):
+    """Запуск сборщика Session Replay ссылок из BigQuery (фоновый режим)."""
     script_path = "scripts/1_collect_links_put_gbq.py"
-    
-    if sync:
-        result = run_script_safe(script_path, "Collect Links")
-        if result["status"] == "error":
-            raise HTTPException(status_code=500, detail=result)
-        return result
-    else:
-        return await run_script_background(script_path, "Collect Links", background_tasks)
+    background_tasks.add_task(run_script_safe, script_path, "Collect Links")
+    return {"message": "Скрипт 'Collect Links' добавлен в очередь выполнения."}
+
 
 @router.post(
     "/scripts/screenshots",
-    summary="📸 Создание скриншотов",
-    description="Автоматизированное создание скриншотов Session Replay через Playwright",
+    summary="📸 Создание скриншотов (с отслеживанием)",
+    description="Запускает создание скриншотов и возвращает ID задачи для отслеживания прогресса.",
     tags=["🔧 Scripts Management"]
 )
-async def run_replay_screenshots(background_tasks: BackgroundTasks, sync: bool = False):
-    """Запуск сборщика скриншотов Session Replay"""
-    script_path = "scripts/2_replay_ai_gbq.py"
-    print("DEBUG: Вызвана ручка /scripts/screenshots")
-    print(f"DEBUG: sync = {sync}")
-    print(f"DEBUG: script_path = {script_path}")
-
-    try:
-        if sync:
-            print("DEBUG: Запускаем run_script_safe")
-            result = run_script_safe(script_path, "Replay Screenshots")
-            print(f"DEBUG: run_script_safe вернул: {result}")
-            if result["status"] == "error":
-                print(f"❌ Ошибка в run_script_safe: {result}")
-                raise HTTPException(status_code=500, detail=result)
-            return result
-        else:
-            print("DEBUG: Запускаем run_script_background")
-            result = await run_script_background(script_path, "Replay Screenshots", background_tasks)
-            print(f"DEBUG: run_script_background вернул: {result}")
-            return result
-    except Exception as e:
-        print(f"❌ Ошибка при запуске скрипта: {e}")
-        import traceback
-        traceback.print_exc()
-        raise HTTPException(status_code=500, detail=str(e))
+async def run_replay_screenshots_tracked(background_tasks: BackgroundTasks):
+    """
+    Запускает сбор скриншотов в фоне и возвращает ID задачи.
+    """
+    task_id = str(uuid.uuid4())
+    task_statuses[task_id] = {
+        "status": "queued", 
+        "details": "Задача добавлена в очередь",
+        "start_time": datetime.now().isoformat()
+    }
+    
+    background_tasks.add_task(run_screenshot_task, task_id)
+    
+    return {
+        "message": "Задача по созданию скриншотов запущена. Используйте ID для отслеживания статуса.",
+        "task_id": task_id,
+        "status_url": f"/api/task-status/{task_id}"
+    }
 
 @router.post("/scripts/extract-text", 
             summary="📄 Извлечение текста",
