@@ -14,11 +14,13 @@ import zipfile
 import tempfile
 from typing import Callable, Optional
 
+# Добавляем путь к корню проекта для импорта config (на всякий случай)
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 try:
     from config.settings import settings
 except ImportError:
+    # Заглушка, если файл настроек не найден (например, при прямом запуске)
     class MockSettings:
         GOOGLE_APPLICATION_CREDENTIALS = os.environ.get('GOOGLE_APPLICATION_CREDENTIALS', '/etc/secrets/bigquery-credentials.json')
         BQ_PROJECT_ID = os.environ.get('BQ_PROJECT_ID', 'codellon-dwh')
@@ -37,7 +39,13 @@ USER_AGENTS = [
 
 class RenderScreenshotCollector:
     def __init__(self, status_callback: Optional[Callable[[str, int], None]] = None):
-        """Инициализация с callback-функцией для статуса."""
+        """
+        Инициализация для Render окружения с callback-функцией для статуса.
+        """
+        # ИСПРАВЛЕНИЕ: Сохраняем callback в САМОМ НАЧАЛЕ.
+        self.status_callback = status_callback
+        
+        # Теперь все остальные инициализации могут безопасно вызывать _update_status.
         self.credentials_path = settings.GOOGLE_APPLICATION_CREDENTIALS
         self.bq_project_id = settings.BQ_PROJECT_ID
         self.bq_dataset_id = settings.BQ_DATASET_ID
@@ -45,23 +53,24 @@ class RenderScreenshotCollector:
         self.gdrive_folder_id = settings.GDRIVE_FOLDER_ID
         self.processing_limit = settings.PROCESSING_LIMIT
         self.min_duration = settings.MIN_DURATION_SECONDS
-        self.cookies = self._load_cookies_from_env()
+        self.full_table_name = f"`{self.bq_project_id}.{self.bq_dataset_id}.{self.bq_table_id}`"
+        
         self.safety_settings = {
             'min_delay': 2, 'max_delay': 4, 'batch_size': 5,
             'batch_pause_min': 30, 'batch_pause_max': 60, 'name': 'RENDER_AUTO'
         }
-        self.full_table_name = f"`{self.bq_project_id}.{self.bq_dataset_id}.{self.bq_table_id}`"
-        self.status_callback = status_callback
         
         self._update_status("Настройка подключений...", 1)
+        self.cookies = self._load_cookies_from_env()
         self._init_bigquery()
         self._init_google_drive()
 
     def _update_status(self, details: str, progress: int):
-        """Вызывает callback для обновления статуса."""
+        """Вызывает callback, если он был предоставлен."""
         if self.status_callback:
             self.status_callback(details, progress)
         else:
+            # Если callback не передан, просто печатаем в консоль
             print(f"[{progress}%] {details}")
 
     def _load_cookies_from_env(self):
@@ -143,21 +152,21 @@ class RenderScreenshotCollector:
             try:
                 for i, url_data in enumerate(urls_data, 1):
                     progress = 10 + int((i / total_urls) * 85)
-                    self._update_status(f"▶️ [{i}/{total_urls}] Обработка URL: {url_data['session_replay_url'][:50]}...", progress)
+                    url = url_data.get('session_replay_url', 'N/A')
+                    self._update_status(f"▶️ [{i}/{total_urls}] Обработка URL: {url[:50]}...", progress)
                     
                     context = browser.new_context(user_agent=random.choice(USER_AGENTS))
                     if self.cookies:
                         context.add_cookies(self.cookies)
                     page = context.new_page()
 
-                    # Здесь должна быть ваша логика обработки одной ссылки, например:
-                    # success, screenshots_count = self.process_single_url(page, url_data)
+                    # Здесь должна быть ваша реальная логика обработки URL
                     # Для примера, имитируем работу:
                     time.sleep(random.uniform(2, 4)) 
                     is_success_mock = random.random() > 0.1 # 90% success rate
                     screenshots_count_mock = random.randint(2, 5) if is_success_mock else 0
                     
-                    self.mark_url_as_processed(url_data['session_replay_url'], screenshots_count_mock, self.gdrive_folder_id if is_success_mock else None)
+                    self.mark_url_as_processed(url, screenshots_count_mock, self.gdrive_folder_id if is_success_mock else None)
                     
                     if is_success_mock:
                         successful += 1
@@ -182,6 +191,8 @@ class RenderScreenshotCollector:
         self._update_status(f"🏁 Обработка завершена. Успешно: {successful}, Ошибки: {failed}", 100)
         return result
 
-# if __name__ == "__main__":
-#     collector = RenderScreenshotCollector()
-#     collector.run()
+if __name__ == "__main__":
+    # Этот блок позволяет запускать скрипт напрямую для отладки
+    print("--- Запуск в режиме отладки ---")
+    collector = RenderScreenshotCollector()
+    collector.run()
