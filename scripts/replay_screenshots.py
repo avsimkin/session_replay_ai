@@ -5,7 +5,7 @@ import hashlib
 import random
 import sys
 from datetime import datetime
-from playwright.sync_api import sync_playwright
+from playwright.sync_api import sync_playwright, Error as PlaywrightError
 from google.cloud import bigquery
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
@@ -15,13 +15,11 @@ import tempfile
 import shutil
 from typing import Callable, Optional
 
-# Добавляем путь к корню проекта для импорта config (на всякий случай)
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 try:
     from config.settings import settings
 except ImportError:
-    # Заглушка, если файл настроек не найден
     class MockSettings:
         GOOGLE_APPLICATION_CREDENTIALS = os.environ.get('GOOGLE_APPLICATION_CREDENTIALS', '/etc/secrets/bigquery-credentials.json')
         BQ_PROJECT_ID = os.environ.get('BQ_PROJECT_ID', 'codellon-dwh')
@@ -33,10 +31,7 @@ except ImportError:
         MIN_DURATION_SECONDS = int(os.environ.get('MIN_DURATION_SECONDS', '20'))
     settings = MockSettings()
 
-USER_AGENTS = [
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15",
-]
+USER_AGENTS = ["Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"]
 
 class RenderScreenshotCollector:
     def __init__(self, status_callback: Optional[Callable[[str, int], None]] = None):
@@ -49,7 +44,7 @@ class RenderScreenshotCollector:
         self.processing_limit = settings.PROCESSING_LIMIT
         self.min_duration = settings.MIN_DURATION_SECONDS
         self.full_table_name = f"`{self.bq_project_id}.{self.bq_dataset_id}.{self.bq_table_id}`"
-        self.safety_settings = {'min_delay': 2, 'max_delay': 5, 'name': 'ОБЫЧНЫЙ (АВТО)'}
+        self.safety_settings = {'min_delay': 3, 'max_delay': 6, 'name': 'НАДЁЖНЫЙ (АВТО)'}
         
         self._update_status("Настройка подключений...", 1)
         self.cookies = self._load_cookies_from_env()
@@ -59,16 +54,19 @@ class RenderScreenshotCollector:
     def _update_status(self, details: str, progress: int):
         if self.status_callback:
             self.status_callback(details, progress)
-        if progress != -1: # Не печатаем служебные сообщения
+        if progress != -1:
             print(f"[{progress}%] {details}")
 
     def _load_cookies_from_env(self):
         try:
             cookies = json.loads(settings.COOKIES)
-            self._update_status(f"Cookies загружены ({len(cookies)} записей)", 2)
+            if not cookies:
+                self._update_status("⚠️ ВНИМАНИЕ: Переменная COOKIES пуста. Аутентификация, скорее всего, не пройдёт.", 2)
+            else:
+                self._update_status(f"Cookies загружены ({len(cookies)} записей)", 2)
             return cookies
         except Exception as e:
-            self._update_status(f"Ошибка загрузки cookies: {e}", 2)
+            self._update_status(f"❌ Ошибка загрузки cookies: {e}. Без них скрипт не сможет войти в систему.", 2)
             return []
 
     def _init_bigquery(self):
@@ -87,38 +85,6 @@ class RenderScreenshotCollector:
         except Exception as e:
             raise Exception(f"Ошибка подключения к Google Drive: {e}")
 
-    def get_unprocessed_urls(self):
-        query = f"""
-        SELECT session_replay_url, amplitude_id, session_replay_id, duration_seconds, events_count, record_date
-        FROM {self.full_table_name}
-        WHERE is_processed = FALSE AND duration_seconds >= {self.min_duration}
-        ORDER BY record_date DESC LIMIT {self.processing_limit}
-        """
-        try:
-            result = self.bq_client.query(query).result()
-            return [dict(row) for row in result]
-        except Exception as e:
-            self._update_status(f"Ошибка получения URL: {e}", 10)
-            raise
-
-    def mark_url_as_processed(self, url, screenshots_count=0, drive_folder_id=None, success=True):
-        status_text = "успешно" if success else "с ошибкой"
-        self._update_status(f"Обновление статуса URL ({status_text})", -1)
-        try:
-            update_query = f"""
-            UPDATE {self.full_table_name}
-            SET is_processed = TRUE, processed_datetime = CURRENT_TIMESTAMP(),
-                screenshots_count = @screenshots_count, drive_folder_id = @drive_folder_id
-            WHERE session_replay_url = @url
-            """
-            job_config = bigquery.QueryJobConfig(query_parameters=[
-                bigquery.ScalarQueryParameter("url", "STRING", url),
-                bigquery.ScalarQueryParameter("screenshots_count", "INTEGER", screenshots_count),
-                bigquery.ScalarQueryParameter("drive_folder_id", "STRING", drive_folder_id)])
-            self.bq_client.query(update_query, job_config=job_config).result()
-        except Exception as e:
-            self._update_status(f"❌ Ошибка обновления статуса URL: {e}", -1)
-
     def get_session_id_from_url(self, url):
         url_hash = hashlib.md5(url.encode()).hexdigest()[:8]
         if "sessionReplayId=" in url:
@@ -126,32 +92,11 @@ class RenderScreenshotCollector:
             return f"{parts[0]}_{parts[1] if len(parts) > 1 else 'unknown'}_{url_hash}"
         return f"no_session_id_{url_hash}"
 
-    def wait_for_content(self, page, selector, timeout=10):
-        self._update_status(f"Ожидание контента (селектор: {selector}, таймаут: {timeout}с)", -1)
-        try:
-            element = page.wait_for_selector(selector, state='visible', timeout=timeout*1000)
-            self._update_status("Контент загружен", -1)
-            return element
-        except Exception:
-            self._update_status(f"Контент не загрузился за {timeout}с", -1)
-            return None
-
-    def screenshot_by_title(self, page, block_title, session_id, base_dir):
-        self._update_status(f"Поиск блока '{block_title}'...", -1)
-        try:
-            parent = page.locator(f'h4:has-text("{block_title}")').locator('..')
-            img_path = os.path.join(base_dir, f"{session_id}_{block_title.lower()}.png")
-            parent.screenshot(path=img_path)
-            self._update_status(f"✅ Скриншот '{block_title}' сохранён", -1)
-            return img_path
-        except Exception as e:
-            self._update_status(f"❌ Не удалось сделать скриншот '{block_title}': {e}", -1)
-            return None
-
-    def create_and_upload_session_archive(self, session_dir, session_id):
+    def create_and_upload_archive(self, session_dir, session_id, is_failure=False):
         archive_path = None
         try:
-            archive_name_base = f"session_replay_{session_id}_{int(time.time())}"
+            prefix = "FAILURE" if is_failure else "session_replay"
+            archive_name_base = f"{prefix}_{session_id}_{int(time.time())}"
             archive_path = shutil.make_archive(archive_name_base, 'zip', session_dir)
             self._update_status(f"📦 Создан архив: {os.path.basename(archive_path)}", -1)
             
@@ -160,67 +105,90 @@ class RenderScreenshotCollector:
             uploaded_file = self.drive_service.files().create(body=file_metadata, media_body=media, fields='id, name').execute()
             self._update_status(f"☁️ Архив загружен в Google Drive. ID: {uploaded_file.get('id')}", -1)
             return uploaded_file
-        except Exception as e:
-            self._update_status(f"❌ Ошибка создания/загрузки архива: {e}", -1)
-            return None
         finally:
             if archive_path and os.path.exists(archive_path):
                 os.remove(archive_path)
 
     def process_single_url(self, page, url_data):
-        # ИСПРАВЛЕНИЕ: Используем правильный ключ 'session_replay_url'
         url = url_data['session_replay_url']
         session_id = self.get_session_id_from_url(url)
-        
         session_dir = tempfile.mkdtemp(prefix=f"session_{session_id}_")
-        screenshot_paths = []
+        
         try:
             page.goto(url, timeout=60000, wait_until='domcontentloaded')
-            page.locator("text=Summary").first.click()
-            time.sleep(random.uniform(5, 8)) # Даем больше времени на прогрузку
+            
+            self._update_status("Ожидание страницы (Summary или Login)...", -1)
+            page.wait_for_selector('text=Summary, input[type="email"]', timeout=30000)
 
-            # Делаем скриншоты
-            userinfo_path = page.locator('.cerulean-cardbase').first.screenshot(path=os.path.join(session_dir, f"{session_id}_userinfo.png"))
+            if page.locator('input[type="email"]').is_visible():
+                raise PlaywrightError("Обнаружена страница входа. Проверьте COOKIES.")
+
+            summary_tab = page.locator("text=Summary").first
+            summary_tab.click(timeout=5000)
+            self._update_status("Клик на 'Summary', ожидание загрузки...", -1)
+            time.sleep(random.uniform(7, 10))
+
+            screenshot_paths = []
+            
+            userinfo_element = page.locator('.cerulean-cardbase').first
+            userinfo_element.wait_for(state='visible', timeout=10000)
+            userinfo_path = os.path.join(session_dir, f"{session_id}_userinfo.png")
+            userinfo_element.screenshot(path=userinfo_path)
             screenshot_paths.append(userinfo_path)
 
-            summary_element = self.wait_for_content(page, 'p.ltext-_uoww22', timeout=20)
-            if summary_element:
-                summary_path = os.path.join(session_dir, f"{session_id}_summary.png")
-                summary_element.screenshot(path=summary_path)
-                screenshot_paths.append(summary_path)
-
-            if len(screenshot_paths) < 1:
-                 raise Exception("Не удалось сделать ни одного скриншота.")
+            summary_element = page.locator('p.ltext-_uoww22').first
+            summary_element.wait_for(state='visible', timeout=20000)
+            summary_path = os.path.join(session_dir, f"{session_id}_summary.png")
+            summary_element.screenshot(path=summary_path)
+            screenshot_paths.append(summary_path)
             
-            # Создаем metadata.json
+            if not screenshot_paths:
+                 raise PlaywrightError("Не удалось сделать ни одного скриншота.")
+
             metadata = {"session_id": session_id, **url_data, "processed_at": datetime.now().isoformat()}
             with open(os.path.join(session_dir, "metadata.json"), 'w', encoding='utf-8') as f:
                 json.dump(metadata, f, indent=2, default=str)
             
-            if not self.create_and_upload_session_archive(session_dir, session_id):
-                raise Exception("Ошибка загрузки архива.")
+            if not self.create_and_upload_archive(session_dir, session_id):
+                raise PlaywrightError("Ошибка загрузки архива в Google Drive.")
             
             return True, len(screenshot_paths)
-        except Exception as e:
-            self._update_status(f"❌ Ошибка при обработке сессии {session_id}: {e}", -1)
-            return False, len(screenshot_paths)
+
+        except PlaywrightError as e:
+            self._update_status(f"❌ Ошибка Playwright: {e}", -1)
+            failure_path = os.path.join(session_dir, f"FAILURE_screenshot_{session_id}.png")
+            page.screenshot(path=failure_path, full_page=True)
+            self._update_status(f"📸 Сделан отладочный скриншот: {os.path.basename(failure_path)}", -1)
+            self.create_and_upload_archive(session_dir, session_id, is_failure=True)
+            return False, 0
         finally:
              shutil.rmtree(session_dir, ignore_errors=True)
 
     def run(self):
-        self._update_status("🚀 Запуск сборщика скриншотов", 0)
-        self._update_status(f"🔍 Получение необработанных URL (лимит: {self.processing_limit})", 5)
-        urls_to_process = self.get_unprocessed_urls()
+        # --- НАЧАЛО: ИЗМЕНЕНИЯ ДЛЯ ОТЛАДКИ ---
+        self._update_status("⚡️ РЕЖИМ ОТЛАДКИ: Используются 3 тестовые ссылки.", 5)
         
-        if not urls_to_process:
-            self._update_status("🎉 Все подходящие URL уже обработаны.", 100)
-            return {"status": "success", "message": "No new URLs to process."}
+        # Задаем ссылки жестко, вместо вызова get_unprocessed_urls()
+        urls_to_process = [
+            {
+                'session_replay_url': 'https://app.amplitude.com/analytics/rn/session-replay/project/258068/search/amplitude_id%3D1247117195850?sessionReplayId=b04f4dad-3dea-4249-b9fe-78b689c822a5/1749812689447&sessionStartTime=1749812689447',
+                'amplitude_id': 1247117195850, 'session_replay_id': 'b04f4dad-3dea-4249-b9fe-78b689c822a5/1749812689447'
+            },
+            {
+                'session_replay_url': 'https://app.amplitude.com/analytics/rn/session-replay/project/258068/search/amplitude_id%3D1247144093674?sessionReplayId=09d7d9ec-9d2f-453b-83f5-5b403e45c202/1749823352686&sessionStartTime=1749823352686',
+                'amplitude_id': 1247144093674, 'session_replay_id': '09d7d9ec-9d2f-453b-83f5-5b403e45c202/1749823352686'
+            },
+            {
+                'session_replay_url': 'https://app.amplitude.com/analytics/rn/session-replay/project/258068/search/amplitude_id%3D868026320025?sessionReplayId=03e5a484-6f63-4fb2-8964-2893e062ea27/1749825242509&sessionStartTime=1749825242509',
+                'amplitude_id': 868026320025, 'session_replay_id': '03e5a484-6f63-4fb2-8964-2893e062ea27/1749825242509'
+            }
+        ]
+        # --- КОНЕЦ: ИЗМЕНЕНИЯ ДЛЯ ОТЛАДКИ ---
 
         total_urls = len(urls_to_process)
-        self._update_status(f"🎯 Найдено {total_urls} URL. Режим: {self.safety_settings['name']}", 10)
+        self._update_status(f"🎯 Найдено {total_urls} URL для отладки. Режим: {self.safety_settings['name']}", 10)
         
         successful, failed, total_screenshots = 0, 0, 0
-        start_time = time.time()
         
         with sync_playwright() as p:
             browser = p.chromium.launch(headless=True, args=['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage'])
@@ -236,8 +204,8 @@ class RenderScreenshotCollector:
 
                     is_success, screenshots_count = self.process_single_url(page, url_data)
                     
-                    url_to_mark = url_data['session_replay_url']
-                    self.mark_url_as_processed(url_to_mark, screenshots_count, self.gdrive_folder_id if is_success else None, success=is_success)
+                    # Временно отключаем обновление статуса в БД, чтобы не портить данные
+                    self._update_status(f"Отладка: пропуск обновления статуса в БД для {url_data['session_replay_url']}", -1)
                     
                     if is_success:
                         successful += 1
@@ -252,11 +220,6 @@ class RenderScreenshotCollector:
             finally:
                 browser.close()
         
-        total_time = time.time() - start_time
-        result = {"status": "completed", "processed": total_urls, "successful": successful, "failed": failed, "time_minutes": round(total_time / 60, 1)}
-        self._update_status(f"🏁 Завершено. Успешно: {successful}, Ошибки: {failed}", 100)
+        result = {"status": "completed", "processed": total_urls, "successful": successful, "failed": failed}
+        self._update_status(f"🏁 Отладка завершена. Успешно: {successful}, Ошибки: {failed}", 100)
         return result
-
-if __name__ == "__main__":
-    collector = RenderScreenshotCollector()
-    collector.run()
