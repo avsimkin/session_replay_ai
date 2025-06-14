@@ -10,7 +10,12 @@ from datetime import datetime
 import pytz
 from typing import Dict, Any
 
-from app.endpoints import router, run_script_safe
+# Импортируем роутер и хранилище из папки app
+from app.endpoints import router
+from app.state import task_statuses
+# Импортируем run_script_safe для старых скриптов
+from app.endpoints import run_script_safe
+
 
 # Настройка логирования
 logging.basicConfig(
@@ -19,10 +24,6 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# --- НОВОЕ: Хранилище статусов задач ---
-# Ключ - task_id, значение - информация о задаче
-task_statuses: Dict[str, Any] = {}
-# ----------------------------------------
 
 # Глобальная переменная для управления планировщиком
 scheduler_running = True
@@ -48,9 +49,6 @@ def run_daily_analytics_pipeline():
         step_start = datetime.now(moscow_tz)
         
         try:
-            # Примечание: для ежедневного пайплайна можно оставить старый запуск
-            # или интегрировать новую систему отслеживания и сюда.
-            # Пока оставляем как есть для простоты.
             result = run_script_safe(script_path, step_name)
             result["step_name"] = step_name
             results.append(result)
@@ -145,9 +143,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Подключаем роутер из app/endpoints.py
 app.include_router(router, prefix="/api")
 
-# --- НОВЫЙ ЭНДПОИНТ для проверки статуса задачи ---
+# Эндпоинт для проверки статуса задачи
 @app.get("/api/task-status/{task_id}", tags=["📊 Monitoring"])
 async def get_task_status(task_id: str):
     """
@@ -157,7 +156,6 @@ async def get_task_status(task_id: str):
     if not status:
         raise HTTPException(status_code=404, detail="Задача не найдена")
     return status
-# ----------------------------------------------------
 
 @app.get("/", tags=["📍 General"])
 async def root():
@@ -183,20 +181,7 @@ async def health_check():
         "scheduler_running": scheduler_running
     }
 
-@app.get("/scheduler/status", tags=["⏰ Scheduler"])
-async def scheduler_status():
-    """⏰ Статус планировщика и расписания"""
-    jobs_info = []
-    for job in schedule.jobs:
-        jobs_info.append(str(job))
-    
-    return {
-        "scheduler_running": scheduler_running,
-        "jobs_count": len(schedule.jobs),
-        "jobs": jobs_info
-    }
-
 if __name__ == "__main__":
     import uvicorn
     port = int(os.environ.get("PORT", 8000))
-    uvicorn.run(app, host="0.0.0.0", port=port)
+    uvicorn.run("main:app", host="0.0.0.0", port=port, reload=True)
