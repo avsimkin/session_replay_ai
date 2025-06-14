@@ -15,18 +15,19 @@ import tempfile
 import shutil
 from typing import Callable, Optional
 
+# Добавляем путь к корню проекта для импорта config (на всякий случай)
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 try:
     from config.settings import settings
 except ImportError:
+    # Заглушка, если файл настроек не найден
     class MockSettings:
         GOOGLE_APPLICATION_CREDENTIALS = os.environ.get('GOOGLE_APPLICATION_CREDENTIALS', '/etc/secrets/bigquery-credentials.json')
         BQ_PROJECT_ID = os.environ.get('BQ_PROJECT_ID', 'codellon-dwh')
         BQ_DATASET_ID = os.environ.get('BQ_DATASET_ID', 'amplitude_session_replay')
         BQ_TABLE_URLS = os.environ.get('BQ_TABLE_URLS', 'session_replay_urls')
         GDRIVE_FOLDER_ID = os.environ.get('GDRIVE_FOLDER_ID', '1K8cbFU2gYpvP3PiHwOOHS1KREqdj6fQX')
-        COOKIES = os.environ.get('COOKIES', '[]')
         PROCESSING_LIMIT = int(os.environ.get('PROCESSING_LIMIT', '10'))
         MIN_DURATION_SECONDS = int(os.environ.get('MIN_DURATION_SECONDS', '20'))
     settings = MockSettings()
@@ -47,26 +48,29 @@ class RenderScreenshotCollector:
         self.safety_settings = {'min_delay': 3, 'max_delay': 6, 'name': 'НАДЁЖНЫЙ (АВТО)'}
         
         self._update_status("Настройка подключений...", 1)
-        self.cookies = self._load_cookies_from_env()
+        self.cookies = self._load_cookies_from_secret_file()
         self._init_bigquery()
         self._init_google_drive()
 
     def _update_status(self, details: str, progress: int):
         if self.status_callback:
             self.status_callback(details, progress)
-        if progress != -1:
+        if progress != -1: # Не печатаем служебные сообщения
             print(f"[{progress}%] {details}")
 
-    def _load_cookies_from_env(self):
+    def _load_cookies_from_secret_file(self):
+        secret_file_path = "/etc/secrets/cookies.json"
+        self._update_status(f"Попытка загрузки cookies из {secret_file_path}...", 2)
+        if not os.path.exists(secret_file_path):
+            self._update_status(f"❌ Файл {secret_file_path} не найден! Аутентификация не удастся.", 2)
+            return []
         try:
-            cookies = json.loads(settings.COOKIES)
-            if not cookies:
-                self._update_status("⚠️ ВНИМАНИЕ: Переменная COOKIES пуста. Аутентификация, скорее всего, не пройдёт.", 2)
-            else:
-                self._update_status(f"Cookies загружены ({len(cookies)} записей)", 2)
+            with open(secret_file_path, 'r') as f:
+                cookies = json.load(f)
+            self._update_status(f"✅ Cookies успешно загружены из Secret File ({len(cookies)} записей).", 2)
             return cookies
         except Exception as e:
-            self._update_status(f"❌ Ошибка загрузки cookies: {e}. Без них скрипт не сможет войти в систему.", 2)
+            self._update_status(f"❌ Не удалось прочитать или распарсить {secret_file_path}: {e}", 2)
             return []
 
     def _init_bigquery(self):
