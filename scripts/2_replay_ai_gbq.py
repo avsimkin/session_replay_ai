@@ -289,7 +289,7 @@ class RenderScreenshotCollector:
         try:
             # Переход на страницу
             self.simulate_human_behavior(page)
-            page.goto(url, timeout=30000)
+            page.goto(url, timeout=60000) // 60 секунд вместо 30 (по умолчанию)
             time.sleep(random.uniform(2, 5))
             
             # Поиск и клик по Summary
