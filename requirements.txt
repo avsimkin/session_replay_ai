@@ -9,6 +9,8 @@ google-cloud-bigquery>=3.0.0
 google-api-python-client>=2.0.0
 google-auth-httplib2
 google-auth-oauthlib
+google-auth==2.23.4
+google-oauth2-tool==0.0.3
 
 # Data processing
 pandas>=2.0.0
