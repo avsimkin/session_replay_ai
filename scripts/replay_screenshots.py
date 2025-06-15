@@ -10,10 +10,12 @@ import tempfile
 import shutil
 from typing import Callable, Optional
 
+# Импорты для работы с Google API
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
 
+# Добавляем путь к корню проекта для импорта config
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 try:
     from config.settings import settings
@@ -82,12 +84,25 @@ class RenderScreenshotCollector:
         finally:
             if archive_path and os.path.exists(archive_path):
                 os.remove(archive_path)
-    
-    # --- ИНТЕГРАЦИЯ ВАШЕЙ ЛОГИКИ ПОИСКА ---
+
+    # --- НАЧАЛО: Ваша проверенная локальная логика ---
+
+    def simulate_human_behavior(self, page):
+        self._update_status("Имитация действий пользователя...", -1)
+        try:
+            for _ in range(random.randint(2, 4)):
+                page.mouse.move(random.randint(200, 1200), random.randint(200, 700), steps=random.randint(5, 15))
+                time.sleep(random.uniform(0.1, 0.3))
+            if random.random() < 0.4:
+                page.evaluate(f"window.scrollBy(0, {random.randint(100, 500) * random.choice([1, -1])})")
+                time.sleep(random.uniform(0.5, 1.5))
+        except Exception as e:
+            self._update_status(f"Небольшая ошибка при имитации: {e}", -1)
+
     def screenshot_userinfo_block(self, page, session_id, base_dir):
         self._update_status("Поиск блока 'User Info'...", -1)
         try:
-            element = page.locator('.cerulean-cardbase').first
+            element = page.locator('.cerulean-cardbase.cerulean-alpha-general-card').first
             element.wait_for(state='visible', timeout=15000)
             img_path = os.path.join(base_dir, f"{session_id}_userinfo.png")
             element.screenshot(path=img_path)
@@ -100,10 +115,13 @@ class RenderScreenshotCollector:
     def screenshot_summary_flexible(self, page, session_id, base_dir):
         self._update_status("Поиск блока 'Summary'...", -1)
         try:
-            # Основной, самый надежный селектор
+            # Ждем появления основного элемента
+            page.wait_for_selector('p.ltext-_uoww22', state='visible', timeout=20000)
             element = page.locator('p.ltext-_uoww22').first
-            element.wait_for(state='visible', timeout=20000) # Ждем его появления
-            
+            # Проверяем, что в нем есть текст
+            if len(element.inner_text()) < 20:
+                self._update_status("Текст в Summary еще не загружен, ждем еще...", -1)
+                time.sleep(10) # Дополнительное ожидание
             img_path = os.path.join(base_dir, f"{session_id}_summary.png")
             element.screenshot(path=img_path)
             self._update_status("✅ Скриншот 'Summary' сделан.", -1)
@@ -115,11 +133,9 @@ class RenderScreenshotCollector:
     def screenshot_by_title(self, page, block_title, session_id, base_dir):
         self._update_status(f"Поиск блока '{block_title}'...", -1)
         try:
-            # Ищем заголовок, затем поднимаемся к родительскому контейнеру
             element = page.locator(f'h4:has-text("{block_title}")')
-            parent_container = element.locator('xpath=./ancestor::div[contains(@class, "cerulean-card")] | ./ancestor::div[@class="section-container"]').first
+            parent_container = element.locator('xpath=./ancestor::div[contains(@class, "cerulean-card")]').first
             parent_container.wait_for(state='visible', timeout=10000)
-            
             img_path = os.path.join(base_dir, f"{session_id}_{block_title.lower()}.png")
             parent_container.screenshot(path=img_path)
             self._update_status(f"✅ Скриншот '{block_title}' сделан.", -1)
@@ -135,16 +151,14 @@ class RenderScreenshotCollector:
         
         try:
             page.goto(url, timeout=90000, wait_until='networkidle')
-            time.sleep(5) # Дополнительное ожидание
+            self.simulate_human_behavior(page)
             
-            if page.locator('input[type="email"]').is_visible(timeout=3000):
-                raise PlaywrightError("Обнаружена страница входа. Проверьте COOKIES.")
-
             summary_tab = page.locator("text=Summary").first
             summary_tab.click(timeout=10000)
+            self._update_status("Клик на 'Summary', ожидание...", -1)
             time.sleep(10)
+            self.simulate_human_behavior(page)
 
-            # Делаем скриншоты по вашей логике
             paths = {
                 "userinfo": self.screenshot_userinfo_block(page, session_id, session_dir),
                 "summary": self.screenshot_summary_flexible(page, session_id, session_dir),
@@ -154,7 +168,6 @@ class RenderScreenshotCollector:
             
             valid_screenshots = [p for p in paths.values() if p is not None]
             
-            # Условие успеха: есть хотя бы 3 скриншота
             if len(valid_screenshots) < 3:
                  raise PlaywrightError(f"Сделано меньше 3 скриншотов ({len(valid_screenshots)}), сессия считается неудачной.")
 
@@ -174,16 +187,18 @@ class RenderScreenshotCollector:
                 page.screenshot(path=failure_path, full_page=True, timeout=15000)
                 self._update_status(f"📸 Сделан отладочный скриншот.", -1)
             except Exception as screenshot_error:
-                self._update_status(f"❌ Не удалось сделать даже отладочный скриншот: {screenshot_error}", -1)
+                self._update_status(f"❌ Не удалось сделать отладочный скриншот: {screenshot_error}", -1)
             
             self.create_and_upload_archive(session_dir, session_id, is_failure=True)
             return False, 0
         finally:
              shutil.rmtree(session_dir, ignore_errors=True)
+             
+    # --- КОНЕЦ: Ваша проверенная локальная логика ---
 
     def run(self):
         self._update_status("⚡️ ФИНАЛЬНАЯ ОТЛАДКА: Используются 3 тестовые ссылки.", 5)
-        urls_to_process = [{'session_replay_url': url} for url in TEST_URLS]
+        urls_to_process = [{'session_replay_url': url, 'amplitude_id': None, 'session_replay_id': None} for url in TEST_URLS]
 
         total_urls = len(urls_to_process)
         self._update_status(f"🎯 Найдено {total_urls} URL для отладки.", 10)
@@ -191,13 +206,14 @@ class RenderScreenshotCollector:
         successful, failed = 0, 0
         
         with sync_playwright() as p:
+            # Используем Chromium, т.к. он более стабилен с вашими локаторами
             browser = p.chromium.launch(headless=True, args=['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage'])
             try:
                 for i, url_data in enumerate(urls_to_process, 1):
                     progress = 10 + int((i / total_urls) * 85)
                     self._update_status(f"▶️ [{i}/{total_urls}] URL: {url_data['session_replay_url'][:70]}...", progress)
                     
-                    context = browser.new_context(user_agent=random.choice(USER_AGENTS), viewport={'width': 1600, 'height': 900})
+                    context = browser.new_context(user_agent=random.choice(USER_AGENTS), viewport={'width': 1600, 'height': 1200})
                     if self.cookies: context.add_cookies(self.cookies)
                     page = context.new_page()
 
