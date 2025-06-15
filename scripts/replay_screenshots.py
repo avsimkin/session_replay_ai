@@ -583,26 +583,42 @@ class ContinuousScreenshotCollector:
         finally:
             shutil.rmtree(temp_screenshots_dir, ignore_errors=True)
 
-    def choose_safety_mode(self):
-        self._update_status("\n🛡️ Выберите режим безопасности:", -1)
-        self._update_status("1. 🐌 МЕДЛЕННЫЙ (3-8 сек между URL, батчи по 10)", -1)
-        self._update_status("2. ⚡ ОБЫЧНЫЙ (2-5 сек между URL, батчи по 20)", -1)
-        self._update_status("3. 🚀 БЫСТРЫЙ (1-3 сек между URL, батчи по 30)", -1)
-        while True:
-            try:
-                choice = input("\nВведите номер (1-3): ").strip()
-                if choice == "1":
-                    return {
-                        'min_delay': 3, 'max_delay': 8, 'batch_size': 10,
-                        'batch_pause_min': 60, 'batch_pause_max': 120, 'name': 'МЕДЛЕННЫЙ'
-                    }
-                elif choice == "2":
-                    return {
-                        'min_delay': 2, 'max_delay': 5, 'batch_size': 20,
-                        'batch_pause_min': 30, 'batch_pause_max': 60, 'name': 'ОБЫЧНЫЙ'
-                    }
-                elif choice == "3":
-                    return {
-                        'min_delay': 1, 'max_delay': 3, 'batch_size': 30,
-                        'batch_pause_min': 15, 'batch_pause_max': 30, 'name': 'БЫСТРЫЙ'
-                    }
+def choose_safety_mode(self):
+    self._update_status("\n🛡️ Выберите режим безопасности:", -1)
+    self._update_status("1. 🐌 МЕДЛЕННЫЙ (3-8 сек между URL, батчи по 10)", -1)
+    self._update_status("2. ⚡ ОБЫЧНЫЙ (2-5 сек между URL, батчи по 20)", -1)
+    self._update_status("3. 🚀 БЫСТРЫЙ (1-3 сек между URL, батчи по 30)", -1)
+    while True:
+        try:
+            choice = input("\nВведите номер (1-3): ").strip()
+            if choice == "1":
+                return {
+                    'min_delay': 3, 
+                    'max_delay': 8, 
+                    'batch_size': 10,
+                    'batch_pause_min': 60, 
+                    'batch_pause_max': 120, 
+                    'name': 'МЕДЛЕННЫЙ'
+                }
+            elif choice == "2":
+                return {
+                    'min_delay': 2, 
+                    'max_delay': 5, 
+                    'batch_size': 20,
+                    'batch_pause_min': 30, 
+                    'batch_pause_max': 60, 
+                    'name': 'ОБЫЧНЫЙ'
+                }
+            elif choice == "3":
+                return {
+                    'min_delay': 1, 
+                    'max_delay': 3, 
+                    'batch_size': 30,
+                    'batch_pause_min': 15, 
+                    'batch_pause_max': 30, 
+                    'name': 'БЫСТРЫЙ'
+                }
+            else:
+                self._update_status("❌ Введите число от 1 до 3", -1)
+        except ValueError:
+            self._update_status("❌ Введите корректное число", -1)
