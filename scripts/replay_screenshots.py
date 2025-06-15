@@ -605,3 +605,4 @@ class ContinuousScreenshotCollector:
                     return {
                         'min_delay': 1, 'max_delay': 3, 'batch_size': 30,
                         'batch_pause_min': 15, 'batch_pause_max': 30, 'name': 'БЫСТРЫЙ'
+                    }
