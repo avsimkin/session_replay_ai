@@ -566,6 +566,12 @@ class RenderScreenshotCollector:
             failure_path = os.path.join(temp_screenshots_dir, f"FAILURE_screenshot.png")
             try: 
                 page.screenshot(path=failure_path, full_page=True, timeout=15000)
+            except: 
+                pass
+            self.create_and_upload_session_archive(temp_screenshots_dir, session_id, is_failure=True)
+            return False, []
+        finally:
+            shutil.rmtree(temp_screenshots_dir, ignore_errors=True)
 
     def get_safety_settings(self):
         """Настройки безопасности на основе переменных окружения"""
