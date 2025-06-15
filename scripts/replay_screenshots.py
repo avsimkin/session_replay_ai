@@ -565,8 +565,8 @@ class RenderScreenshotCollector:
             self._update_status(f"❌ Ошибка обработки URL: {e}", -1)
             failure_path = os.path.join(temp_screenshots_dir, f"FAILURE_screenshot.png")
             try: 
-                page.screenshot(path=failure_path
-                
+                page.screenshot(path=failure_path, full_page=True, timeout=15000)
+
     def get_safety_settings(self):
         """Настройки безопасности на основе переменных окружения"""
         safety_mode = os.environ.get('SAFETY_MODE', 'normal').lower()
