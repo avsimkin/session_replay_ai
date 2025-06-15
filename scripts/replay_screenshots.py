@@ -113,7 +113,7 @@ class RenderScreenshotCollector:
         except Exception as e:
             raise Exception(f"❌ Ошибка подключения к Google Drive: {e}")
 
-def get_unprocessed_urls(self, limit=None):
+    def get_unprocessed_urls(self, limit=None):
         query = f"""
         SELECT 
             session_replay_url,
@@ -211,7 +211,7 @@ def get_unprocessed_urls(self, limit=None):
         except Exception:
             pass
 
-def screenshot_summary_flexible(self, page, session_id, base_dir, summary_el=None):
+    def screenshot_summary_flexible(self, page, session_id, base_dir, summary_el=None):
         self._update_status("📄 Ищем Summary блок...", -1)
 
         el = summary_el
@@ -415,7 +415,7 @@ def screenshot_summary_flexible(self, page, session_id, base_dir, summary_el=Non
             self._update_status("❌ Ошибка создания скриншота user info", -1)
             return None
 
-def create_session_folder_structure(self, session_id, screenshots, url_data):
+    def create_session_folder_structure(self, session_id, screenshots, url_data):
         session_dir = tempfile.mkdtemp(prefix=f"session_folder_{session_id}_")
         session_screenshots = []
         for screenshot_path in screenshots:
@@ -487,7 +487,7 @@ def create_session_folder_structure(self, session_id, screenshots, url_data):
             self._update_status(f"❌ Ошибка создания архива: {e}", -1)
             return None
 
-def process_single_url(self, page, url_data, safety_settings):
+    def process_single_url(self, page, url_data, safety_settings):
         url = url_data['url']
         session_id = self.get_session_id_from_url(url)
         temp_screenshots_dir = tempfile.mkdtemp(prefix=f"screenshots_{session_id}_")
@@ -567,7 +567,7 @@ def process_single_url(self, page, url_data, safety_settings):
             try: 
                 page.screenshot(path=failure_path
                 
-def get_safety_settings(self):
+    def get_safety_settings(self):
         """Настройки безопасности на основе переменных окружения"""
         safety_mode = os.environ.get('SAFETY_MODE', 'normal').lower()
         
@@ -616,7 +616,7 @@ def get_safety_settings(self):
                 return True
         return False
         
-def process_batch(self, urls_batch, safety_settings):
+    def process_batch(self, urls_batch, safety_settings):
         """Обрабатывает один батч URL"""
         batch_start_time = time.time()
         batch_successful = 0
@@ -692,7 +692,7 @@ def process_batch(self, urls_batch, safety_settings):
         
         return batch_successful, batch_failed
         
-def run(self):
+    def run(self):
         """Основной метод непрерывной обработки - работает пока есть URL"""
         self.start_time = time.time()
         
@@ -786,7 +786,7 @@ def run(self):
         return result
 
 
-def main():
+    def main():
     """
     Основная функция для запуска в Render
     """
