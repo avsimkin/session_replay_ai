@@ -34,7 +34,6 @@ TEST_URLS = [
 ]
 
 class RenderScreenshotCollector:
-    # Адаптированный __init__ для сервера
     def __init__(self, status_callback: Optional[Callable[[str, int], None]] = None):
         self.status_callback = status_callback
         self.credentials_path = settings.GOOGLE_APPLICATION_CREDENTIALS
@@ -82,7 +81,7 @@ class RenderScreenshotCollector:
         return f"no_session_id_{url_hash}"
 
     def wait_for_content(self, page, selector, bad_texts=("Loading", "Loading summary"), timeout=10, min_text_length=10):
-        self._update_status(f"⏳ Ждем загрузку контента (таймаут {timeout} сек)...", -1)
+        self._update_status(f"⏳ Ждем контент (селектор: {selector}, таймаут: {timeout}с)...", -1)
         start = time.time()
         while True:
             el = page.query_selector(selector)
@@ -92,10 +91,10 @@ class RenderScreenshotCollector:
                     self._update_status(f"✅ Контент загружен за {time.time() - start:.1f} сек", -1)
                     return el
             if time.time() - start > timeout:
-                self._update_status(f"⚠️ Контент не загрузился за {timeout} сек", -1)
+                self._update_status(f"⚠️ Таймаут ожидания контента ({selector})", -1)
                 return None
             time.sleep(0.5)
-            
+
     def simulate_human_behavior(self, page):
         self._update_status("Имитация действий пользователя...", -1)
         try:
@@ -114,8 +113,13 @@ class RenderScreenshotCollector:
         if not el:
             self._update_status("⚠️ Пробуем fallback селекторы для Summary...", -1)
             for selector in ['div[style*="min-width: 460px"]', '.ltext-_uoww22', 'div:has-text("Summary")', 'p:has-text("The user")']:
-                el = page.query_selector(selector)
-                if el and len(el.inner_text().strip()) > 20: break
+                try:
+                    el = page.locator(selector).first
+                    el.wait_for(state='visible', timeout=2000)
+                    if len(el.inner_text().strip()) > 20: break
+                    else: el = None
+                except:
+                    el = None
             if not el:
                 self._update_status("❌ Не удалось найти Summary блок.", -1)
                 return None
@@ -130,11 +134,12 @@ class RenderScreenshotCollector:
 
     def screenshot_by_title(self, page, block_title, session_id, base_dir):
         self._update_status(f"🔍 Ищем блок '{block_title}'...", -1)
-        el = page.locator(f'h4:has-text("{block_title}")').locator('xpath=./ancestor::div[contains(@class, "cerulean-card")]').first
         try:
-            el.wait_for(state='visible', timeout=15000)
+            element = page.locator(f'h4:has-text("{block_title}")')
+            parent_container = element.locator('xpath=./ancestor::div[contains(@class, "cerulean-card")]').first
+            parent_container.wait_for(state='visible', timeout=15000)
             img_path = os.path.join(base_dir, f"{session_id}_{block_title.lower()}.png")
-            el.screenshot(path=img_path)
+            parent_container.screenshot(path=img_path)
             self._update_status(f"✅ {block_title} скриншот сохранён", -1)
             return img_path
         except Exception as e:
@@ -154,11 +159,42 @@ class RenderScreenshotCollector:
             self._update_status(f"❌ Ошибка скриншота User Info: {e}", -1)
             return None
     
+    def create_and_upload_archive(self, session_dir, session_id, is_failure=False):
+        archive_path = None
+        try:
+            prefix = "FAILURE" if is_failure else "session_replay"
+            archive_name_base = f"{prefix}_{session_id}"
+            archive_path = shutil.make_archive(archive_name_base, 'zip', session_dir)
+            file_metadata = {'name': os.path.basename(archive_path), 'parents': [self.gdrive_folder_id]}
+            media = MediaFileUpload(archive_path, resumable=True)
+            uploaded_file = self.drive_service.files().create(body=file_metadata, media_body=media, fields='id, name').execute()
+            self._update_status(f"☁️ Архив загружен. ID: {uploaded_file.get('id')}", -1)
+            return uploaded_file
+        finally:
+            if archive_path and os.path.exists(archive_path):
+                os.remove(archive_path)
+
+    def create_session_folder_structure(self, session_id, screenshots, url_data):
+        session_dir = tempfile.mkdtemp(prefix=f"session_folder_{session_id}_")
+        for screenshot_path in screenshots:
+            if screenshot_path and os.path.exists(screenshot_path):
+                shutil.copy2(screenshot_path, session_dir)
+        
+        metadata = {
+            "session_id": session_id,
+            "url": url_data.get('session_replay_url'),
+            "processed_at": datetime.now().isoformat(),
+            "screenshots": [os.path.basename(p) for p in screenshots if p]
+        }
+        with open(os.path.join(session_dir, "metadata.json"), 'w', encoding='utf-8') as f:
+            json.dump(metadata, f, indent=2, default=str)
+        return session_dir
+
     def process_single_url(self, page, url_data):
         url = url_data['session_replay_url']
         session_id = self.get_session_id_from_url(url)
-        session_dir = tempfile.mkdtemp(prefix=f"session_{session_id}_")
-        
+        temp_screenshots_dir = tempfile.mkdtemp(prefix=f"screenshots_{session_id}_")
+
         try:
             self.simulate_human_behavior(page)
             page.goto(url, timeout=90000, wait_until="networkidle")
@@ -169,41 +205,38 @@ class RenderScreenshotCollector:
             
             summary_tab.click()
             self._update_status("🖱️ Кликнули на Summary", -1)
-            time.sleep(random.uniform(5, 8))
+            time.sleep(random.uniform(8, 12))
             self.simulate_human_behavior(page)
             
             summary_el = self.wait_for_content(page, 'p.ltext-_uoww22', timeout=20)
             
-            paths = {
-                "userinfo": self.screenshot_userinfo_block(page, session_id, session_dir),
-                "summary": self.screenshot_summary_flexible(page, session_id, session_dir, summary_el),
-                "sentiment": self.screenshot_by_title(page, "Sentiment", session_id, session_dir),
-                "actions": self.screenshot_by_title(page, "Actions", session_id, session_dir)
-            }
+            screenshot_paths = []
+            screenshot_paths.append(self.screenshot_userinfo_block(page, session_id, temp_screenshots_dir))
+            screenshot_paths.append(self.screenshot_summary_flexible(page, session_id, temp_screenshots_dir, summary_el))
+            screenshot_paths.append(self.screenshot_by_title(page, "Sentiment", session_id, temp_screenshots_dir))
+            screenshot_paths.append(self.screenshot_by_title(page, "Actions", session_id, temp_screenshots_dir))
             
-            valid_screenshots = [p for p in paths.values() if p is not None]
+            valid_screenshots = [p for p in screenshot_paths if p is not None]
             
             if len(valid_screenshots) < 3:
                  raise PlaywrightError(f"Сделано меньше 3 скриншотов ({len(valid_screenshots)}), сессия неудачная.")
 
-            metadata = {"session_id": session_id, "url": url}
-            with open(os.path.join(session_dir, "metadata.json"), 'w', encoding='utf-8') as f:
-                json.dump(metadata, f, indent=2, default=str)
-            
-            if not self.create_and_upload_archive(session_dir, session_id):
+            session_archive_dir = self.create_session_folder_structure(session_id, valid_screenshots, url_data)
+            if not self.create_and_upload_archive(session_archive_dir, session_id):
                 raise PlaywrightError("Ошибка загрузки архива в Google Drive.")
+            shutil.rmtree(session_archive_dir, ignore_errors=True)
             
             return True, len(valid_screenshots)
 
         except (PlaywrightError, PlaywrightTimeoutError) as e:
             self._update_status(f"❌ Ошибка Playwright: {e}", -1)
-            failure_path = os.path.join(session_dir, f"FAILURE_screenshot.png")
+            failure_path = os.path.join(temp_screenshots_dir, f"FAILURE_screenshot.png")
             try: page.screenshot(path=failure_path, full_page=True, timeout=15000)
             except: pass
-            self.create_and_upload_archive(session_dir, session_id, is_failure=True)
+            self.create_and_upload_archive(temp_screenshots_dir, session_id, is_failure=True)
             return False, 0
         finally:
-             shutil.rmtree(session_dir, ignore_errors=True)
+             shutil.rmtree(temp_screenshots_dir, ignore_errors=True)
              
     # --- КОНЕЦ: Ваша проверенная локальная логика ---
 
@@ -224,9 +257,12 @@ class RenderScreenshotCollector:
                     context = browser.new_context(user_agent=random.choice(USER_AGENTS), viewport={'width': 1600, 'height': 1200})
                     if self.cookies: context.add_cookies(self.cookies)
                     page = context.new_page()
+
                     is_success, _ = self.process_single_url(page, url_data)
+                    
                     if is_success: successful += 1
                     else: failed += 1
+                    
                     page.close()
                     context.close()
             finally:
@@ -235,7 +271,3 @@ class RenderScreenshotCollector:
         result = {"status": "completed", "processed": total_urls, "successful": successful, "failed": failed}
         self._update_status(f"🏁 Отладка завершена. Успешно: {successful}, Ошибки: {failed}", 100)
         return result
-
-if __name__ == "__main__":
-    collector = RenderScreenshotCollector()
-    collector.run()
