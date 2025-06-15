@@ -37,7 +37,7 @@ USER_AGENTS = [
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:120.0) Gecko/20100101 Firefox/120.0"
 ]
 
-class ContinuousScreenshotCollector:
+class RenderScreenshotCollector:
     def __init__(self, status_callback: Optional[Callable[[str, int], None]] = None):
         self.status_callback = status_callback
         self.credentials_path = settings.GOOGLE_APPLICATION_CREDENTIALS
@@ -113,7 +113,7 @@ class ContinuousScreenshotCollector:
         except Exception as e:
             raise Exception(f"❌ Ошибка подключения к Google Drive: {e}")
 
-    def get_unprocessed_urls(self, limit=None):
+def get_unprocessed_urls(self, limit=None):
         query = f"""
         SELECT 
             session_replay_url,
@@ -177,24 +177,14 @@ class ContinuousScreenshotCollector:
         return f"no_session_id_{url_hash}"
 
     def wait_for_content(self, page, selector, bad_texts=("Loading", "Loading summary"), timeout=10, min_text_length=10):
-        """
-        Ждём появления контента не дольше timeout секунд.
-        Проверяем каждые 0.5 сек, логируем каждые 2 сек.
-        Как только появился валидный текст — сразу возвращаем элемент.
-        Если за timeout секунд не появился — возвращаем None.
-        """
         start = time.time()
-        last_log = 0
         while True:
             el = page.query_selector(selector)
             if el:
                 txt = el.inner_text().strip()
                 if txt and all(bad not in txt for bad in bad_texts) and len(txt) >= min_text_length:
                     return el
-            elapsed = time.time() - start
-            if elapsed - last_log >= 3:
-                last_log = elapsed
-            if elapsed > timeout:
+            if time.time() - start > timeout:
                 return None
             time.sleep(0.5)
 
@@ -221,7 +211,7 @@ class ContinuousScreenshotCollector:
         except Exception:
             pass
 
-    def screenshot_summary_flexible(self, page, session_id, base_dir, summary_el=None):
+def screenshot_summary_flexible(self, page, session_id, base_dir, summary_el=None):
         self._update_status("📄 Ищем Summary блок...", -1)
 
         el = summary_el
@@ -425,7 +415,7 @@ class ContinuousScreenshotCollector:
             self._update_status("❌ Ошибка создания скриншота user info", -1)
             return None
 
-    def create_session_folder_structure(self, session_id, screenshots, url_data):
+def create_session_folder_structure(self, session_id, screenshots, url_data):
         session_dir = tempfile.mkdtemp(prefix=f"session_folder_{session_id}_")
         session_screenshots = []
         for screenshot_path in screenshots:
@@ -497,7 +487,7 @@ class ContinuousScreenshotCollector:
             self._update_status(f"❌ Ошибка создания архива: {e}", -1)
             return None
 
-    def process_single_url(self, page, url_data, safety_settings):
+def process_single_url(self, page, url_data, safety_settings):
         url = url_data['url']
         session_id = self.get_session_id_from_url(url)
         temp_screenshots_dir = tempfile.mkdtemp(prefix=f"screenshots_{session_id}_")
@@ -575,50 +565,260 @@ class ContinuousScreenshotCollector:
             self._update_status(f"❌ Ошибка обработки URL: {e}", -1)
             failure_path = os.path.join(temp_screenshots_dir, f"FAILURE_screenshot.png")
             try: 
-                page.screenshot(path=failure_path, full_page=True, timeout=15000)
-            except: 
-                pass
-            self.create_and_upload_session_archive(temp_screenshots_dir, session_id, is_failure=True)
-            return False, []
-        finally:
-            shutil.rmtree(temp_screenshots_dir, ignore_errors=True)
+                page.screenshot(path=failure_path
+                
+def get_safety_settings(self):
+        """Настройки безопасности на основе переменных окружения"""
+        safety_mode = os.environ.get('SAFETY_MODE', 'normal').lower()
+        
+        if safety_mode == 'slow':
+            return {
+                'min_delay': 3, 'max_delay': 8, 'batch_size': 10,
+                'batch_pause_min': 60, 'batch_pause_max': 120, 'name': 'МЕДЛЕННЫЙ'
+            }
+        elif safety_mode == 'fast':
+            return {
+                'min_delay': 1, 'max_delay': 3, 'batch_size': 30,
+                'batch_pause_min': 15, 'batch_pause_max': 30, 'name': 'БЫСТРЫЙ'
+            }
+        else:  # normal
+            return {
+                'min_delay': 2, 'max_delay': 5, 'batch_size': 20,
+                'batch_pause_min': 30, 'batch_pause_max': 60, 'name': 'ОБЫЧНЫЙ'
+            }
 
-def choose_safety_mode(self):
-    self._update_status("\n🛡️ Выберите режим безопасности:", -1)
-    self._update_status("1. 🐌 МЕДЛЕННЫЙ (3-8 сек между URL, батчи по 10)", -1)
-    self._update_status("2. ⚡ ОБЫЧНЫЙ (2-5 сек между URL, батчи по 20)", -1)
-    self._update_status("3. 🚀 БЫСТРЫЙ (1-3 сек между URL, батчи по 30)", -1)
-    while True:
+    def print_overall_stats(self):
+        """Выводит общую статистику работы"""
+        if self.start_time:
+            elapsed = time.time() - self.start_time
+            elapsed_hours = elapsed / 3600
+            success_rate = (self.total_successful / self.total_processed * 100) if self.total_processed > 0 else 0
+            
+            self._update_status("=" * 60, -1)
+            self._update_status(f"📊 ОБЩАЯ СТАТИСТИКА РАБОТЫ", -1)
+            self._update_status(f"⏱️  Время работы: {elapsed_hours:.1f} часов", -1)
+            self._update_status(f"🔄 Батчей завершено: {self.batches_completed}", -1)
+            self._update_status(f"📈 Всего обработано: {self.total_processed} URL", -1)
+            self._update_status(f"✅ Успешно: {self.total_successful}", -1)
+            self._update_status(f"❌ Ошибок: {self.total_failed}", -1)
+            self._update_status(f"📊 Процент успеха: {success_rate:.1f}%", -1)
+            if self.total_processed > 0:
+                avg_time_per_url = elapsed / self.total_processed
+                self._update_status(f"⚡ Среднее время на URL: {avg_time_per_url:.1f} сек", -1)
+            self._update_status("=" * 60, -1)
+
+    def check_runtime_limit(self):
+        """Проверяет, не превышен ли лимит времени работы"""
+        if self.start_time:
+            elapsed_hours = (time.time() - self.start_time) / 3600
+            if elapsed_hours >= self.max_runtime_hours:
+                self._update_status(f"⏰ Достигнут лимит времени работы ({self.max_runtime_hours}ч)", -1)
+                return True
+        return False
+        
+def process_batch(self, urls_batch, safety_settings):
+        """Обрабатывает один батч URL"""
+        batch_start_time = time.time()
+        batch_successful = 0
+        batch_failed = 0
+        
+        self._update_status(f"🚀 Начинаем обработку батча из {len(urls_batch)} URL", -1)
+        
+        with sync_playwright() as p:
+            browser_args = [
+                '--no-proxy-server',
+                '--disable-proxy-config-service',
+                '--no-sandbox',
+                '--disable-setuid-sandbox',
+                '--disable-blink-features=AutomationControlled',
+                '--disable-dev-shm-usage',
+                '--disable-web-security',
+                '--disable-features=VizDisplayCompositor'
+            ]
+            browser = p.chromium.launch(headless=True, args=browser_args)
+            
+            try:
+                for i, url_data in enumerate(urls_batch, 1):
+                    user_agent = random.choice(USER_AGENTS)
+                    context = browser.new_context(
+                        user_agent=user_agent,
+                        viewport={'width': 1366, 'height': 768},
+                        locale='en-US',
+                        timezone_id='America/New_York'
+                    )
+                    context.add_init_script("""
+                        Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
+                        window.navigator.chrome = { runtime: {} };
+                        Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
+                        Object.defineProperty(navigator, 'plugins', {get: () => [1, 2, 3, 4, 5]});
+                    """)
+                    context.add_cookies(self.cookies)
+                    page = context.new_page()
+
+                    self._update_status(f"▶️ [{i}/{len(urls_batch)}] Обрабатываем URL из батча...", -1)
+                    success, screenshots = self.process_single_url(page, url_data, safety_settings)
+
+                    # Обновляем статус в BigQuery
+                    self.mark_url_as_processed(url_data['url'], success)
+
+                    if success:
+                        batch_successful += 1
+                        self.total_successful += 1
+                        self._update_status("✅ URL успешно обработан", -1)
+                    else:
+                        batch_failed += 1
+                        self.total_failed += 1
+                        self._update_status("❌ Ошибка обработки URL", -1)
+                    
+                    self.total_processed += 1
+
+                    # Пауза между URL в батче
+                    if i < len(urls_batch):
+                        delay = random.uniform(safety_settings['min_delay'], safety_settings['max_delay'])
+                        self._update_status(f"⏱️ Пауза {delay:.1f} сек...", -1)
+                        time.sleep(delay)
+
+                    page.close()
+                    context.close()
+                    
+            finally:
+                browser.close()
+
+        batch_time = time.time() - batch_start_time
+        self.batches_completed += 1
+        
+        self._update_status(f"📦 Батч #{self.batches_completed} завершен за {batch_time/60:.1f} мин", -1)
+        self._update_status(f"   ✅ Успешно: {batch_successful} | ❌ Ошибок: {batch_failed}", -1)
+        
+        return batch_successful, batch_failed
+        
+def run(self):
+        """Основной метод непрерывной обработки - работает пока есть URL"""
+        self.start_time = time.time()
+        
+        self._update_status("🔄 ЗАПУСК НЕПРЕРЫВНОЙ ОБРАБОТКИ СКРИНШОТОВ", 10)
+        self._update_status("=" * 60, 10)
+        self._update_status(f"⚙️  Размер батча: {self.batch_size} URL", 15)
+        self._update_status(f"⏱️  Пауза между батчами: {self.pause_between_batches} сек", 15)
+        self._update_status(f"🕐 Максимальное время работы: {self.max_runtime_hours} часов", 15)
+        self._update_status(f"📏 Минимальная длительность сессий: {self.min_duration_seconds} сек", 15)
+        
+        # Получаем настройки безопасности
+        safety_settings = self.get_safety_settings()
+        self._update_status(f"🛡️  Режим безопасности: {safety_settings['name']}", 20)
+        
+        cycle_number = 0
+        
         try:
-            choice = input("\nВведите номер (1-3): ").strip()
-            if choice == "1":
-                return {
-                    'min_delay': 3, 
-                    'max_delay': 8, 
-                    'batch_size': 10,
-                    'batch_pause_min': 60, 
-                    'batch_pause_max': 120, 
-                    'name': 'МЕДЛЕННЫЙ'
-                }
-            elif choice == "2":
-                return {
-                    'min_delay': 2, 
-                    'max_delay': 5, 
-                    'batch_size': 20,
-                    'batch_pause_min': 30, 
-                    'batch_pause_max': 60, 
-                    'name': 'ОБЫЧНЫЙ'
-                }
-            elif choice == "3":
-                return {
-                    'min_delay': 1, 
-                    'max_delay': 3, 
-                    'batch_size': 30,
-                    'batch_pause_min': 15, 
-                    'batch_pause_max': 30, 
-                    'name': 'БЫСТРЫЙ'
-                }
+            while True:
+                cycle_number += 1
+                cycle_start_time = time.time()
+                
+                # Проверяем лимит времени работы
+                if self.check_runtime_limit():
+                    self._update_status("🛑 Останавливаем работу по лимиту времени", -1)
+                    break
+                
+                self._update_status(f"\n🔍 ЦИКЛ #{cycle_number}: Проверяем наличие необработанных URL...", -1)
+                
+                # Получаем следующую порцию URL
+                urls_batch = self.get_unprocessed_urls(limit=self.batch_size)
+                
+                if not urls_batch:
+                    self._update_status("🎉 Нет необработанных URL! Работа завершена.", -1)
+                    break
+                
+                self._update_status(f"📋 Найдено {len(urls_batch)} URL для обработки", -1)
+                
+                # Обрабатываем батч
+                batch_successful, batch_failed = self.process_batch(urls_batch, safety_settings)
+                
+                # Показываем прогресс
+                cycle_time = time.time() - cycle_start_time
+                self._update_status(f"⏱️  Цикл #{cycle_number} завершен за {cycle_time/60:.1f} мин", -1)
+                
+                # Выводим промежуточную статистику каждые 5 циклов
+                if cycle_number % 5 == 0:
+                    self.print_overall_stats()
+                
+                # Проверяем, есть ли еще URL для следующего цикла
+                remaining_urls = self.get_unprocessed_urls(limit=1)
+                if not remaining_urls:
+                    self._update_status("🎯 Все URL обработаны! Завершаем работу.", -1)
+                    break
+                
+                # Пауза между батчами
+                if remaining_urls:  # Только если есть еще URL для обработки
+                    pause_time = random.uniform(
+                        self.pause_between_batches,
+                        self.pause_between_batches + 60  # +1 минута разброса
+                    )
+                    self._update_status(f"⏸️  Пауза между батчами: {pause_time:.1f} сек...", -1)
+                    time.sleep(pause_time)
+                
+        except KeyboardInterrupt:
+            self._update_status("⚠️ Получен сигнал остановки", -1)
+        except Exception as e:
+            self._update_status(f"❌ Критическая ошибка в основном цикле: {e}", -1)
+            import traceback
+            traceback.print_exc()
+        
+        # Финальная статистика
+        self.print_overall_stats()
+        
+        # Формируем результат
+        total_time = time.time() - self.start_time
+        result = {
+            "status": "completed",
+            "cycles_completed": cycle_number,
+            "batches_completed": self.batches_completed,
+            "total_processed": self.total_processed,
+            "total_successful": self.total_successful,
+            "total_failed": self.total_failed,
+            "success_rate": f"{(self.total_successful/self.total_processed*100):.1f}%" if self.total_processed > 0 else "0%",
+            "total_runtime_hours": round(total_time / 3600, 2),
+            "reason_for_stop": "no_more_urls" if not self.get_unprocessed_urls(limit=1) else "time_limit_reached"
+        }
+        
+        self._update_status(f"🏁 НЕПРЕРЫВНАЯ ОБРАБОТКА ЗАВЕРШЕНА!", 100)
+        self._update_status(f"📊 Причина остановки: {result['reason_for_stop']}", 100)
+        
+        return result
+
+
+def main():
+    """
+    Основная функция для запуска в Render
+    """
+    try:
+        def console_status_callback(details: str, progress: int):
+            """Callback для вывода в консоль"""
+            if progress != -1:
+                print(f"[{progress}%] {details}")
             else:
-                self._update_status("❌ Введите число от 1 до 3", -1)
-        except ValueError:
-            self._update_status("❌ Введите корректное число", -1)
+                print(f"[INFO] {details}")
+
+        collector = BigQueryScreenshotCollector(status_callback=console_status_callback)
+        
+        # Запускаем непрерывную обработку
+        print("🤖 RENDER MODE: Запуск непрерывной обработки")
+        print(f"⚙️ Настройки:")
+        print(f"   📦 Размер батча: {collector.batch_size}")
+        print(f"   ⏱️ Пауза между батчами: {collector.pause_between_batches} сек")
+        print(f"   🕐 Максимальное время работы: {collector.max_runtime_hours} ч")
+        print(f"   📏 Минимальная длительность: {collector.min_duration_seconds} сек")
+        
+        result = collector.run()
+
+        print(f"\n🏁 Финальный результат: {result}")
+        return result
+
+    except Exception as e:
+        print(f"❌ Критическая ошибка: {e}")
+        import traceback
+        traceback.print_exc()
+        return {"status": "error", "error": str(e)}
+
+
+if __name__ == "__main__":
+    main()
