@@ -792,7 +792,7 @@ class RenderScreenshotCollector:
         return result
 
 
-    def main():
+def main():
     """
     Основная функция для запуска в Render
     """
