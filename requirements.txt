@@ -28,5 +28,11 @@ openai>=1.0.0
 # Utils
 python-dotenv
 requests
-aiofiles
+airfoils
 Pillow
+
+# OCR dependencies
+pytesseract>=0.3.10
+
+# Utils (если еще нет)
+Pillow>=10.0.0

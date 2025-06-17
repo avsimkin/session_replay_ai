@@ -34,7 +34,7 @@ def run_daily_analytics_pipeline():
     pipeline_steps = [
         ("scripts/collect_links.py", "Сбор Session Replay ссылок"),
         ("scripts/replay_screenshots.py", "Создание скриншотов"),
-        # ("scripts/extract_text.py", "Извлечение текста"), # Пример для будущих скриптов
+        ("scripts/extract_text.py", "Извлечение текста OCR"), 
         # ("scripts/get_clusters.py", "Кластеризация данных"), # Пример для будущих скриптов
         # ("scripts/summarize.py", "Создание саммари") # Пример для будущих скриптов
     ]

@@ -5,6 +5,7 @@ services:
     plan: starter  # Можете изменить на standard или pro при необходимости
     region: oregon  # Или другой регион по выбору
     buildCommand: |
+      apt-get update && apt-get install -y tesseract-ocr tesseract-ocr-eng
       pip install --upgrade pip
       pip install -r requirements.txt
       playwright install chromium --with-deps
@@ -31,7 +32,15 @@ services:
         value: "EVENTS_258068"
       - key: BQ_TABLE_COMPLETE
         value: "replay_text_complete"
-      
+
+      # OCR настройки
+      - key: BQ_SOURCE_TABLE
+        value: "session_replay_urls"
+      - key: BQ_TARGET_TABLE
+        value: "replay_text_complete"
+      - key: TESSDATA_PREFIX
+        value: "/usr/share/tesseract-ocr/5/tessdata/"
+
       # Amplitude настройки
       - key: AMPLITUDE_PROJECT_ID
         value: "258068"

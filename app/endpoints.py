@@ -6,6 +6,8 @@ from datetime import datetime
 import sys
 import uuid
 from typing import Dict, Any
+from scripts.extract_text import TextExtractionProcessor
+
 
 # Импортируем общее состояние из app.state
 from app.state import task_statuses
@@ -80,6 +82,44 @@ def run_screenshot_task(task_id: str):
             "end_time": datetime.now().isoformat()
         })
 
+def run_ocr_task(task_id: str):
+    """Функция-обёртка для запуска OCR обработки с отслеживанием."""
+    logger.info(f"🔤 Запуск задачи OCR обработки, ID: {task_id}")
+    task_statuses[task_id].update({
+        "status": "running",
+        "progress": 0,
+        "details": "Инициализация OCR...",
+        "start_time": datetime.now().isoformat()
+    })
+
+    def status_callback(details: str, progress: int):
+        """Callback для обновления статуса OCR задачи."""
+        if task_id in task_statuses:
+            task_statuses[task_id]["details"] = details
+            task_statuses[task_id]["progress"] = progress
+            logger.info(f"OCR задача {task_id}: [{progress}%] {details}")
+
+    try:
+        processor = TextExtractionProcessor(status_callback=status_callback)
+        result = processor.run()
+        
+        task_statuses[task_id].update({
+            "status": "completed",
+            "progress": 100,
+            "details": "OCR обработка успешно завершена.",
+            "end_time": datetime.now().isoformat(),
+            "result": result
+        })
+    except Exception as e:
+        error_message = f"Критическая ошибка в OCR задаче: {str(e)}"
+        logger.error(f"OCR ID задачи {task_id}: {error_message}", exc_info=True)
+        task_statuses[task_id].update({
+            "status": "failed",
+            "progress": 100,
+            "details": error_message,
+            "end_time": datetime.now().isoformat()
+        })
+
 # === API Эндпоинты ===
 
 @router.post("/scripts/screenshots", summary="📸 Создание скриншотов (с отслеживанием)", tags=["🔧 Scripts Management"])
@@ -107,3 +147,21 @@ async def run_collect_links(background_tasks: BackgroundTasks):
     script_path = "scripts/collect_links.py"
     background_tasks.add_task(run_script_safe, script_path, "Collect Links")
     return {"message": "Скрипт 'Collect Links' добавлен в очередь выполнения."}
+
+@router.post("/scripts/extract-text", summary="📝 Извлечение текста OCR", tags=["🔧 Scripts Management"])
+async def run_text_extraction_tracked(background_tasks: BackgroundTasks):
+    """Запускает OCR обработку архивов в фоне и возвращает ID задачи для отслеживания."""
+    task_id = str(uuid.uuid4())
+    task_statuses[task_id] = {
+        "status": "queued", 
+        "details": "OCR задача добавлена в очередь",
+        "start_time": datetime.now().isoformat()
+    }
+    
+    background_tasks.add_task(run_ocr_task, task_id)
+    
+    return {
+        "message": "Задача по извлечению текста OCR запущена. Используйте ID для отслеживания статуса.",
+        "task_id": task_id,
+        "status_url": f"/api/task-status/{task_id}"
+    }
