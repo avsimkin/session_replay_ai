@@ -270,6 +270,18 @@ class TextExtractionProcessor:
                         
                         # OCR с обработкой ошибок
                         try:
+                            # Проверяем доступность tesseract
+                            if not hasattr(pytesseract, '_tesseract_cmd_exists'):
+                                try:
+                                    pytesseract.get_tesseract_version()
+                                    pytesseract._tesseract_cmd_exists = True
+                                except:
+                                    pytesseract._tesseract_cmd_exists = False
+                            
+                            if not pytesseract._tesseract_cmd_exists:
+                                self._update_status("⚠️ Tesseract недоступен, пропускаем OCR", -1)
+                                continue
+                                
                             if 'userinfo' in fname:
                                 text = pytesseract.image_to_string(img, lang='eng')
                                 userinfo = self.parse_userinfo_text(text)

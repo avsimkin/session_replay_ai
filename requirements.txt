@@ -36,3 +36,6 @@ pytesseract>=0.3.10
 
 # Utils (если еще нет)
 Pillow>=10.0.0
+
+pyarrow>=10.0.0
+pytesseract>=0.3.10
