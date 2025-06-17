@@ -7,6 +7,7 @@ import sys
 import uuid
 from typing import Dict, Any
 from scripts.extract_text import TextExtractionProcessor
+from scripts.clustering_analysis import ClusteringAnalysisProcessor
 
 
 # Импортируем общее состояние из app.state
@@ -120,6 +121,45 @@ def run_ocr_task(task_id: str):
             "end_time": datetime.now().isoformat()
         })
 
+def run_clustering_task(task_id: str):
+    """Функция-обёртка для запуска кластеризации с отслеживанием."""
+    logger.info(f"🎯 Запуск задачи кластеризации, ID: {task_id}")
+    task_statuses[task_id].update({
+        "status": "running",
+        "progress": 0,
+        "details": "Инициализация кластеризации...",
+        "start_time": datetime.now().isoformat()
+    })
+
+    def status_callback(details: str, progress: int):
+        """Callback для обновления статуса кластеризации."""
+        if task_id in task_statuses:
+            task_statuses[task_id]["details"] = details
+            task_statuses[task_id]["progress"] = progress
+            logger.info(f"Кластеризация {task_id}: [{progress}%] {details}")
+
+    try:
+        processor = ClusteringAnalysisProcessor(status_callback=status_callback)
+        result = processor.run()
+        
+        task_statuses[task_id].update({
+            "status": "completed",
+            "progress": 100,
+            "details": "Кластеризация успешно завершена.",
+            "end_time": datetime.now().isoformat(),
+            "result": result
+        })
+    except Exception as e:
+        error_message = f"Критическая ошибка в кластеризации: {str(e)}"
+        logger.error(f"Кластеризация ID {task_id}: {error_message}", exc_info=True)
+        task_statuses[task_id].update({
+            "status": "failed",
+            "progress": 100,
+            "details": error_message,
+            "end_time": datetime.now().isoformat()
+        })
+
+
 # === API Эндпоинты ===
 
 @router.post("/scripts/screenshots", summary="📸 Создание скриншотов (с отслеживанием)", tags=["🔧 Scripts Management"])
@@ -162,6 +202,24 @@ async def run_text_extraction_tracked(background_tasks: BackgroundTasks):
     
     return {
         "message": "Задача по извлечению текста OCR запущена. Используйте ID для отслеживания статуса.",
+        "task_id": task_id,
+        "status_url": f"/api/task-status/{task_id}"
+    }
+
+@router.post("/scripts/clustering", summary="🎯 Кластеризация и анализ", tags=["🔧 Scripts Management"])
+async def run_clustering_analysis_tracked(background_tasks: BackgroundTasks):
+    """Запускает кластеризацию и анализ данных в фоне и возвращает ID задачи для отслеживания."""
+    task_id = str(uuid.uuid4())
+    task_statuses[task_id] = {
+        "status": "queued", 
+        "details": "Задача кластеризации добавлена в очередь",
+        "start_time": datetime.now().isoformat()
+    }
+    
+    background_tasks.add_task(run_clustering_task, task_id)
+    
+    return {
+        "message": "Задача по кластеризации и анализу запущена. Используйте ID для отслеживания статуса.",
         "task_id": task_id,
         "status_url": f"/api/task-status/{task_id}"
     }

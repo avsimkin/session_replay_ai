@@ -42,6 +42,11 @@ services:
       - key: TESSDATA_PREFIX
         value: "/usr/share/tesseract-ocr/5/tessdata/"
 
+      - key: BQ_CLUSTERING_TABLE
+        value: "replay_text_complete"
+      - key: NLTK_DATA
+        value: "/opt/render/project/src/nltk_data"
+
       # Amplitude настройки
       - key: AMPLITUDE_PROJECT_ID
         value: "258068"

@@ -39,3 +39,6 @@ Pillow>=10.0.0
 
 pyarrow>=10.0.0
 pytesseract>=0.3.10
+
+# NLP dependencies  
+nltk>=3.8.0
