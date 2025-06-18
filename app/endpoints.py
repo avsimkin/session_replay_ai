@@ -26,12 +26,17 @@ def run_script_safe(script_path: str, script_name: str) -> Dict[str, Any]:
         if not os.path.exists(script_path):
             raise FileNotFoundError(f"Скрипт не найден: {script_path}")
         
+        # Увеличиваем таймаут для OCR и кластеризации
+        timeout_seconds = 1800  # 30 минут по умолчанию
+        if 'extract_text' in script_path or 'clustering' in script_path:
+            timeout_seconds = 2700  # 45 минут для длительных операций
+        
         process = subprocess.run(
             [sys.executable, script_path],
             capture_output=True,
             text=True,
             check=False,
-            timeout=1800
+            timeout=timeout_seconds  # Увеличенный таймаут
         )
         
         if process.returncode == 0:
@@ -44,6 +49,7 @@ def run_script_safe(script_path: str, script_name: str) -> Dict[str, Any]:
     except Exception as e:
         logger.error(f"Критическая ошибка при запуске {script_name}: {str(e)}")
         return {"status": "critical_error", "script": script_name, "error": str(e)}
+
 
 def run_screenshot_task(task_id: str):
     """Функция-обёртка для запуска сборщика скриншотов с отслеживанием."""

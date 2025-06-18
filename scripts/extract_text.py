@@ -37,11 +37,10 @@ class TextExtractionProcessor:
         self.bq_source_table = settings.BQ_SOURCE_TABLE
         self.bq_target_table = settings.BQ_TARGET_TABLE
         
-        # Статистика работы
-        self.start_time = None
-        self.total_processed = 0
-        self.total_successful = 0
-        self.total_failed = 0
+        # Настройки для непрерывной работы (оптимизация для Render)
+        self.batch_size = int(os.environ.get('OCR_BATCH_SIZE', '20'))  # Уменьшили с 50 до 20
+        self.max_runtime_minutes = int(os.environ.get('OCR_MAX_RUNTIME_MINUTES', '25'))  # 25 минут максимум
+        self.save_frequency = int(os.environ.get('OCR_SAVE_FREQUENCY', '5'))  # Сохранять каждые 5 записей
         
         self._update_status("🔐 Настраиваем подключения...", 1)
         self._init_clients()
@@ -66,12 +65,60 @@ class TextExtractionProcessor:
             )
             self.bq_client = bigquery.Client(credentials=credentials, project=self.bq_project_id)
             self.drive_service = build('drive', 'v3', credentials=credentials)
+            
+            # Настройка Tesseract
+            self._setup_tesseract()
+            
             self._update_status("✅ Google Cloud подключен", 5)
         except Exception as e:
             raise Exception(f"❌ Ошибка подключения к Google Cloud: {e}")
 
-    def get_processed_sessions(self):
+    def _setup_tesseract(self):
+        """Настройка Tesseract OCR"""
+        try:
+            # Проверяем переменную окружения
+            tesseract_cmd = os.environ.get('TESSERACT_CMD')
+            if tesseract_cmd and os.path.exists(tesseract_cmd):
+                pytesseract.pytesseract.tesseract_cmd = tesseract_cmd
+                self._update_status(f"✅ Tesseract найден: {tesseract_cmd}", -1)
+                return
+            
+            # Проверяем стандартные пути
+            possible_paths = [
+                '/usr/bin/tesseract',
+                '/usr/local/bin/tesseract',
+                '/opt/homebrew/bin/tesseract',
+                'tesseract'
+            ]
+            
+            for path in possible_paths:
+                try:
+                    if path == 'tesseract':
+                        # Проверяем через PATH
+                        pytesseract.get_tesseract_version()
+                        self._update_status("✅ Tesseract найден в PATH", -1)
+                        return
+                    elif os.path.exists(path):
+                        pytesseract.pytesseract.tesseract_cmd = path
+                        pytesseract.get_tesseract_version()
+                        self._update_status(f"✅ Tesseract найден: {path}", -1)
+                        return
+                except:
+                    continue
+            
+            self._update_status("⚠️ Tesseract не найден - OCR будет пропущен", -1)
+            self.tesseract_available = False
+            
+        except Exception as e:
+            self._update_status(f"⚠️ Ошибка настройки Tesseract: {e}", -1)
+            self.tesseract_available = False
+
+    def get_processed_sessions(self, limit=None):
         """Получить список обработанных сессий из BigQuery, которые еще НЕ обработаны OCR"""
+        # Ограничиваем по умолчанию для избежания таймаутов
+        if limit is None:
+            limit = self.batch_size * 10  # Максимум 200 записей за раз
+            
         query = f"""
         SELECT 
             s.session_replay_url, 
@@ -85,6 +132,8 @@ class TextExtractionProcessor:
             ON s.session_replay_id = t.session_id
         WHERE s.is_processed = TRUE 
             AND t.session_id IS NULL  -- Исключаем уже обработанные OCR
+        ORDER BY s.record_date DESC
+        LIMIT {limit}
         """
         
         self._update_status("🔍 Получаем необработанные сессии из BigQuery...", 10)
@@ -109,25 +158,32 @@ class TextExtractionProcessor:
 
     def find_zip_for_session(self, session_id):
         """Найти ZIP-архив для session_id в папке Google Drive"""
-        query = f"'{self.gdrive_folder_id}' in parents and name contains '{session_id}' and name contains '.zip'"
+        # Попробуем разные варианты поиска
+        search_patterns = [
+            f"'{self.gdrive_folder_id}' in parents and name contains '{session_id}' and name contains '.zip'",
+            f"'{self.gdrive_folder_id}' in parents and name contains '{session_id.split('/')[0]}' and name contains '.zip'",
+            f"'{self.gdrive_folder_id}' in parents and name contains 'session_replay' and name contains '{session_id}' and name contains '.zip'"
+        ]
         
-        try:
-            results = self.drive_service.files().list(
-                q=query,
-                fields="files(id, name)",
-                pageSize=10
-            ).execute()
-            files = results.get('files', [])
-            
-            if files:
-                self._update_status(f"  🔎 Найден архив: {files[0]['name']}", -1)
-                return files[0]
-            
-            self._update_status("  ❌ Архив не найден!", -1)
-            return None
-        except Exception as e:
-            self._update_status(f"  ❌ Ошибка поиска архива: {e}", -1)
-            return None
+        for i, query in enumerate(search_patterns):
+            try:
+                results = self.drive_service.files().list(
+                    q=query,
+                    fields="files(id, name)",
+                    pageSize=10
+                ).execute()
+                files = results.get('files', [])
+                
+                if files:
+                    self._update_status(f"  🔎 Найден архив (попытка {i+1}): {files[0]['name']}", -1)
+                    return files[0]
+                    
+            except Exception as e:
+                self._update_status(f"  ⚠️ Ошибка поиска (попытка {i+1}): {e}", -1)
+                continue
+        
+        self._update_status("  ❌ Архив не найден во всех попытках!", -1)
+        return None
 
     def get_zipfile_from_drive(self, file_id):
         """Скачать ZIP-архив с Google Drive в память"""
@@ -268,18 +324,10 @@ class TextExtractionProcessor:
                     with zip_file.open(fname) as file:
                         img = Image.open(file)
                         
-                        # OCR с обработкой ошибок
+                        # OCR с улучшенной проверкой
                         try:
-                            # Проверяем доступность tesseract
-                            if not hasattr(pytesseract, '_tesseract_cmd_exists'):
-                                try:
-                                    pytesseract.get_tesseract_version()
-                                    pytesseract._tesseract_cmd_exists = True
-                                except:
-                                    pytesseract._tesseract_cmd_exists = False
-                            
-                            if not pytesseract._tesseract_cmd_exists:
-                                self._update_status("⚠️ Tesseract недоступен, пропускаем OCR", -1)
+                            # Проверяем доступность tesseract один раз
+                            if not self.tesseract_available:
                                 continue
                                 
                             if 'userinfo' in fname:
@@ -294,6 +342,9 @@ class TextExtractionProcessor:
                                 data['actions'] = pytesseract.image_to_string(img, lang='eng')
                         except Exception as ocr_error:
                             self._update_status(f"⚠️ OCR ошибка для {fname}: {ocr_error}", -1)
+                            # Если ошибка Tesseract - отключаем его для всех последующих
+                            if "tesseract" in str(ocr_error).lower():
+                                self.tesseract_available = False
                             continue
                             
         except Exception as e:
@@ -326,7 +377,14 @@ class TextExtractionProcessor:
             self.bq_client.query(update_query, job_config=job_config).result()
             self._update_status(f"✅ Обновлен статус для {session_replay_url}", -1)
         except Exception as e:
-            self._update_status(f"❌ Ошибка обновления статуса: {e}", -1)
+    def check_runtime_limit(self):
+        """Проверяет, не превышен ли лимит времени работы"""
+        if self.start_time:
+            elapsed_minutes = (datetime.now() - self.start_time).total_seconds() / 60
+            if elapsed_minutes >= self.max_runtime_minutes:
+                self._update_status(f"⏰ Достигнут лимит времени работы ({self.max_runtime_minutes} мин)", -1)
+                return True
+        return False
 
     def upload_to_bigquery(self, rows):
         """Загрузить данные в целевую таблицу BigQuery"""
@@ -358,13 +416,17 @@ class TextExtractionProcessor:
             self._update_status("✅ Все сессии уже обработаны OCR!", 100)
             return {"status": "no_sessions", "message": "Нет сессий для OCR обработки"}
 
-        self._update_status(f"📋 Начинаем обработку {len(sessions)} сессий", 25)
+        self._update_status(f"📋 Начинаем обработку {len(sessions)} сессий (макс. {self.max_runtime_minutes} мин)", 25)
         
         all_data = []
-        batch_size = 50
         
         try:
             for i, session in enumerate(sessions, 1):
+                # Проверка лимита времени
+                if self.check_runtime_limit():
+                    self._update_status(f"⏰ Остановка по лимиту времени. Обработано: {i-1}/{len(sessions)}", -1)
+                    break
+                    
                 progress = 25 + int((i / len(sessions)) * 70)
                 self._update_status(f"▶️ [{i}/{len(sessions)}] Обрабатываем сессию: {session['session_replay_id']}", progress)
 
@@ -392,10 +454,10 @@ class TextExtractionProcessor:
                     self.total_successful += 1
                     self._update_status(f"✅ Сессия {session['session_replay_id']} обработана OCR", -1)
 
-                    # Сохранение батчами
-                    if len(all_data) >= batch_size:
+                    # Более частые сохранения для избежания потери данных
+                    if len(all_data) >= self.save_frequency:
                         self.upload_to_bigquery(all_data)
-                        self._update_status(f"💾 Сохранен батч из {len(all_data)} сессий", -1)
+                        self._update_status(f"💾 Сохранен микро-батч из {len(all_data)} сессий", -1)
                         all_data = []
 
                 except Exception as e:

@@ -51,6 +51,15 @@ services:
       - key: AMPLITUDE_PROJECT_ID
         value: "258068"
       
+      # OCR оптимизация для избежания таймаутов
+      - key: OCR_BATCH_SIZE
+        value: "20"  # Уменьшено с 50
+      - key: OCR_MAX_RUNTIME_MINUTES
+        value: "25"  # 25 минут максимум
+      - key: OCR_SAVE_FREQUENCY
+        value: "5"   # Сохранять каждые 5 записей      
+
+      
       # Настройки скриптов
       - key: MIN_DURATION_SECONDS
         value: "20"
