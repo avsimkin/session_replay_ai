@@ -377,6 +377,9 @@ class TextExtractionProcessor:
             self.bq_client.query(update_query, job_config=job_config).result()
             self._update_status(f"✅ Обновлен статус для {session_replay_url}", -1)
         except Exception as e:
+            self._update_status(f"❌ Ошибка обновления статуса: {e}", -1)
+        
+        
     def check_runtime_limit(self):
         """Проверяет, не превышен ли лимит времени работы"""
         if self.start_time:
