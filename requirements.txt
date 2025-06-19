@@ -42,3 +42,5 @@ pytesseract>=0.3.10
 
 # NLP dependencies  
 nltk>=3.8.0
+
+db-dtypes
