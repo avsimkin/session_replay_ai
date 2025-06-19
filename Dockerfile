@@ -5,6 +5,9 @@ FROM mcr.microsoft.com/playwright/python:v1.44.0-jammy
 # Устанавливаем рабочую директорию в контейнере
 WORKDIR /app
 
+# Устанавливаем tesseract-ocr
+RUN apt-get update && apt-get install -y tesseract-ocr
+
 # Копируем файл с зависимостями и устанавливаем их
 # Этот шаг кэшируется, если requirements.txt не меняется
 COPY requirements.txt .
