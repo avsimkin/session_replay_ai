@@ -804,7 +804,7 @@ def main():
             else:
                 print(f"[INFO] {details}")
 
-        collector = BigQueryScreenshotCollector(status_callback=console_status_callback)
+        collector = RenderScreenshotCollector(status_callback=console_status_callback)
         
         # Запускаем непрерывную обработку
         print("🤖 RENDER MODE: Запуск непрерывной обработки")

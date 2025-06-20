@@ -10,10 +10,12 @@ from datetime import datetime
 import pytz
 from typing import Dict, Any
 
-# Импортируем роутер и хранилище из папки app
 from app.endpoints import router
 from app.state import task_statuses
 from app.endpoints import run_script_safe
+
+from app.endpoints import run_screenshot_task, run_ocr_task, run_clustering_task
+from scripts.collect_links import main as run_collect_links_main
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -25,23 +27,50 @@ moscow_tz = pytz.timezone("Europe/Moscow")
 def run_daily_analytics_pipeline():
     """Ежедневный запуск полного пайплайна аналитики"""
     logger.info("🚀 Запуск ежедневного пайплайна аналитики")
-    
-    # --- ИСПРАВЛЕННЫЙ ПОРЯДОК ПАЙПЛАЙНА ---
-    pipeline_steps = [
-        ("scripts/collect_links.py", "Сбор Session Replay ссылок"),
-        ("scripts/extract_text.py", "Извлечение текста OCR"),
-        ("scripts/clustering_analysis.py", "Кластеризация и анализ"),
-        ("scripts/replay_screenshots.py", "Создание скриншотов"), # Этот шаг теперь последний
-    ]
-    # ----------------------------------------
-    
-    for script_path, step_name in pipeline_steps:
-        logger.info(f"📝 Выполняем этап: {step_name}")
-        result = run_script_safe(script_path, step_name)
-        if result["status"] != "success":
-            logger.error(f"❌ Этап {step_name} завершен с ошибкой, пайплайн остановлен.")
-            break
-        logger.info(f"✅ Этап {step_name} завершен успешно.")
+
+    try:
+        # --- ШАГ 1: Сбор ссылок ---
+        logger.info("📝 Выполняем этап: Сбор Session Replay ссылок")
+        result_links = run_collect_links_main()
+        if result_links.get("status") != "success":
+            logger.error(f"❌ Этап 'Сбор ссылок' завершен с ошибкой: {result_links.get('error')}. Пайплайн остановлен.")
+            return # Прерываем выполнение
+        logger.info(f"✅ Этап 'Сбор ссылок' завершен успешно. Собрано URL: {result_links.get('collected_urls', 0)}")
+
+        # --- ШАГ 2: Извлечение текста OCR ---
+        # Этот шаг теперь должен запускаться как задача, но мы ждем ее завершения.
+        # Для простоты пайплайна, мы можем вызвать основную логику напрямую.
+        logger.info("📝 Выполняем этап: Извлечение текста OCR")
+        from scripts.extract_text import TextExtractionProcessor
+        ocr_processor = TextExtractionProcessor()
+        result_ocr = ocr_processor.run()
+        if result_ocr.get("status") != "completed":
+             logger.error(f"❌ Этап 'Извлечение текста OCR' завершен с ошибкой. Пайплайн остановлен.")
+             return
+        logger.info(f"✅ Этап 'Извлечение текста OCR' завершен успешно. Обработано: {result_ocr.get('total_processed', 0)}")
+
+
+        # --- ШАГ 3: Кластеризация и анализ ---
+        logger.info("📝 Выполняем этап: Кластеризация и анализ")
+        from scripts.clustering_analysis import ClusteringAnalysisProcessor
+        clustering_processor = ClusteringAnalysisProcessor()
+        result_clustering = clustering_processor.run()
+        if result_clustering.get("status") != "completed":
+            logger.error(f"❌ Этап 'Кластеризация' завершен с ошибкой. Пайплайн остановлен.")
+            return
+        logger.info(f"✅ Этап 'Кластеризация' завершен успешно. Обработано: {result_clustering.get('total_processed', 0)}")
+
+        # --- ШАГ 4: Создание скриншотов (самый долгий) ---
+        # Запускаем его как и раньше, но напрямую
+        logger.info("📝 Выполняем этап: Создание скриншотов")
+        from scripts.replay_screenshots import RenderScreenshotCollector
+        screenshot_collector = RenderScreenshotCollector()
+        result_screenshots = screenshot_collector.run()
+        # Этот процесс будет работать долго, как и задумано
+        logger.info(f"✅ Этап 'Создание скриншотов' завершен. Результат: {result_screenshots}")
+
+    except Exception as e:
+        logger.error(f"💥 Критическая ошибка в ежедневном пайплайне: {e}", exc_info=True)
 
 def run_scheduler():
     """Запуск планировщика задач в отдельном потоке"""
