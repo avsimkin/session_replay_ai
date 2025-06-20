@@ -487,91 +487,106 @@ class RenderScreenshotCollector:
             self._update_status(f"❌ Ошибка создания архива: {e}", -1)
             return None
 
-    def process_single_url(self, page, url_data, safety_settings):
-        url = url_data['url']
-        session_id = self.get_session_id_from_url(url)
-        temp_screenshots_dir = tempfile.mkdtemp(prefix=f"screenshots_{session_id}_")
-        REQUIRED_BLOCKS = ['userinfo', 'summary', 'sentiment']
-        OPTIONAL_BLOCKS = ['actions']
+def process_single_url(self, page, url_data, safety_settings):
+    url = url_data['url']
+    session_id = self.get_session_id_from_url(url)
+    temp_screenshots_dir = tempfile.mkdtemp(prefix=f"screenshots_{session_id}_")
+    REQUIRED_BLOCKS = ['userinfo', 'summary', 'sentiment']
+    OPTIONAL_BLOCKS = ['actions']
+    try:
+        self.simulate_human_behavior(page)
+        page.goto(url, timeout=30000)
+        
+        # --- ТОНКОЕ ИЗМЕНЕНИЕ №1: Ждем появления вкладки "Summary" ---
+        # Вместо немедленной проверки, ждем до 15 секунд, пока вкладка не появится.
         try:
+            summary_tab = page.wait_for_selector("text=Summary", timeout=15000)
+        except PlaywrightTimeoutError:
+            self._update_status("❌ Вкладка Summary не найдена (timeout)", -1)
+            return False, [] # Если вкладки нет, дальнейшая обработка бессмысленна
+
+        # Если вкладка найдена, кликаем по ней
+        if summary_tab:
             self.simulate_human_behavior(page)
-            page.goto(url, timeout=30000)
-            time.sleep(random.uniform(2, 5))
-            summary_tab = page.query_selector("text=Summary")
-            if summary_tab:
-                self.simulate_human_behavior(page)
-                summary_tab.click()
-                self._update_status("🖱️ Кликнули на Summary", -1)
-                time.sleep(random.uniform(3, 6))
-                summary_el = self.wait_for_content(page, 'p.ltext-_uoww22', timeout=10)
-            else:
-                self._update_status("❌ Вкладка Summary не найдена!", -1)
-                return False, []
-            screenshot_results = {}
-            self._update_status("📸 Начинаем создание скриншотов...", -1)
-            userinfo_path = self.screenshot_userinfo_block(page, session_id, temp_screenshots_dir)
-            screenshot_results['userinfo'] = userinfo_path is not None
-            screenshot_paths = [userinfo_path] if userinfo_path else []
-            time.sleep(random.uniform(1, 2))
-            summary_paths = self.screenshot_summary_flexible(page, session_id, temp_screenshots_dir, summary_el=summary_el)
-            screenshot_results['summary'] = len(summary_paths) > 0
-            if summary_paths:
-                screenshot_paths += summary_paths
-            time.sleep(random.uniform(1, 2))
-            sentiment_path = self.screenshot_by_title(page, "Sentiment", session_id, temp_screenshots_dir)
-            screenshot_results['sentiment'] = sentiment_path is not None
-            if sentiment_path:
-                screenshot_paths.append(sentiment_path)
-            time.sleep(random.uniform(1, 2))
-            actions_path = self.screenshot_by_title(page, "Actions", session_id, temp_screenshots_dir)
-            screenshot_results['actions'] = actions_path is not None
-            if actions_path:
-                screenshot_paths.append(actions_path)
-            all_success = all(screenshot_results.get(block, False) for block in REQUIRED_BLOCKS)
-            total_blocks = len([path for path in screenshot_paths if path and os.path.exists(path)])
-            if not all_success:
-                self._update_status("❌ Не получены все обязательные блоки", -1)
-                return False, screenshot_paths
-            if total_blocks < 3:
-                self._update_status("❌ Получено меньше 3 скриншотов", -1)
-                return False, screenshot_paths
-            session_dir, all_files = self.create_session_folder_structure(
-                session_id, screenshot_paths, url_data
-            )
-            quality_info = {
-                "screenshot_results": screenshot_results,
-                "total_screenshots": total_blocks,
-                "required_blocks_success": all_success,
-                "success_rate_percent": 100.0,
-                "processing_quality": "high"
-            }
-            metadata_path = os.path.join(session_dir, "metadata.json")
-            if os.path.exists(metadata_path):
-                with open(metadata_path, 'r', encoding='utf-8') as f:
-                    metadata = json.load(f)
-                metadata['quality_analysis'] = quality_info
-                with open(metadata_path, 'w', encoding='utf-8') as f:
-                    json.dump(metadata, f, ensure_ascii=False, indent=2)
-            uploaded_file = self.create_and_upload_session_archive(session_dir, session_id)
-            if uploaded_file:
-                for path in screenshot_paths:
-                    if path and os.path.exists(path):
-                        os.remove(path)
-                return True, screenshot_paths
-            else:
-                self._update_status("❌ Не удалось загрузить в Google Drive", -1)
-                return False, screenshot_paths
-        except Exception as e:
-            self._update_status(f"❌ Ошибка обработки URL: {e}", -1)
-            failure_path = os.path.join(temp_screenshots_dir, f"FAILURE_screenshot.png")
-            try: 
-                page.screenshot(path=failure_path, full_page=True, timeout=15000)
-            except: 
-                pass
-            self.create_and_upload_session_archive(temp_screenshots_dir, session_id, is_failure=True)
+            summary_tab.click()
+            self._update_status("🖱️ Кликнули на Summary", -1)
+
+            # --- ТОНКОЕ ИЗМЕНЕНИЕ №2: Ждем загрузки контента Summary ---
+            # Вместо time.sleep(), используем твой же метод, но с увеличенным ожиданием.
+            summary_el = self.wait_for_content(page, 'p.ltext-_uoww22', timeout=20)
+        else:
+            # Этот блок теперь вряд ли выполнится, но оставим для страховки
+            self._update_status("❌ Вкладка Summary не найдена!", -1)
             return False, []
-        finally:
-            shutil.rmtree(temp_screenshots_dir, ignore_errors=True)
+
+        screenshot_results = {}
+        self._update_status("📸 Начинаем создание скриншотов...", -1)
+        userinfo_path = self.screenshot_userinfo_block(page, session_id, temp_screenshots_dir)
+        screenshot_results['userinfo'] = userinfo_path is not None
+        screenshot_paths = [userinfo_path] if userinfo_path else []
+        time.sleep(random.uniform(1, 2))
+        
+        # Передаем уже найденный 'summary_el', чтобы не искать его снова
+        summary_paths = self.screenshot_summary_flexible(page, session_id, temp_screenshots_dir, summary_el=summary_el)
+        screenshot_results['summary'] = len(summary_paths) > 0
+        if summary_paths:
+            screenshot_paths += summary_paths
+        time.sleep(random.uniform(1, 2))
+        sentiment_path = self.screenshot_by_title(page, "Sentiment", session_id, temp_screenshots_dir)
+        screenshot_results['sentiment'] = sentiment_path is not None
+        if sentiment_path:
+            screenshot_paths.append(sentiment_path)
+        time.sleep(random.uniform(1, 2))
+        actions_path = self.screenshot_by_title(page, "Actions", session_id, temp_screenshots_dir)
+        screenshot_results['actions'] = actions_path is not None
+        if actions_path:
+            screenshot_paths.append(actions_path)
+        all_success = all(screenshot_results.get(block, False) for block in REQUIRED_BLOCKS)
+        total_blocks = len([path for path in screenshot_paths if path and os.path.exists(path)])
+        if not all_success:
+            self._update_status("❌ Не получены все обязательные блоки", -1)
+            return False, screenshot_paths
+        if total_blocks < 3:
+            self._update_status("❌ Получено меньше 3 скриншотов", -1)
+            return False, screenshot_paths
+        session_dir, all_files = self.create_session_folder_structure(
+            session_id, screenshot_paths, url_data
+        )
+        quality_info = {
+            "screenshot_results": screenshot_results,
+            "total_screenshots": total_blocks,
+            "required_blocks_success": all_success,
+            "success_rate_percent": 100.0,
+            "processing_quality": "high"
+        }
+        metadata_path = os.path.join(session_dir, "metadata.json")
+        if os.path.exists(metadata_path):
+            with open(metadata_path, 'r', encoding='utf-8') as f:
+                metadata = json.load(f)
+            metadata['quality_analysis'] = quality_info
+            with open(metadata_path, 'w', encoding='utf-8') as f:
+                json.dump(metadata, f, ensure_ascii=False, indent=2)
+        uploaded_file = self.create_and_upload_session_archive(session_dir, session_id)
+        if uploaded_file:
+            for path in screenshot_paths:
+                if path and os.path.exists(path):
+                    os.remove(path)
+            return True, screenshot_paths
+        else:
+            self._update_status("❌ Не удалось загрузить в Google Drive", -1)
+            return False, screenshot_paths
+    except Exception as e:
+        self._update_status(f"❌ Ошибка обработки URL: {e}", -1)
+        failure_path = os.path.join(temp_screenshots_dir, f"FAILURE_screenshot.png")
+        try:
+            page.screenshot(path=failure_path, full_page=True, timeout=15000)
+        except:
+            pass
+        self.create_and_upload_session_archive(temp_screenshots_dir, session_id, is_failure=True)
+        return False, []
+    finally:
+        shutil.rmtree(temp_screenshots_dir, ignore_errors=True)
+
 
     def get_safety_settings(self):
         """Настройки безопасности на основе переменных окружения"""
