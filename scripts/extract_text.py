@@ -8,6 +8,7 @@ from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload
 import pandas as pd
+import pandas_gbq
 from datetime import datetime
 import os
 import sys
@@ -205,45 +206,34 @@ class TextExtractionProcessor:
         return False
 
     def upload_to_bigquery(self, rows):
-        if not rows:
-            return
-        try:
-            # --- ДИАГНОСТИЧЕСКИЙ PRINT ---
-            # Проверяем первые 5 записей на наличие и тип record_date
-            print("--- Проверка данных перед загрузкой в BigQuery ---")
-            for i, r in enumerate(rows[:5]): # Смотрим только первые 5, чтобы не засорять лог
-                if 'record_date' in r:
-                    print(f"Запись {i}: record_date={r['record_date']}, тип={type(r['record_date'])}")
-                else:
-                    print(f"Запись {i}: КЛЮЧ 'record_date' ОТСУТСТВУЕТ!")
-            print("-------------------------------------------------")
-            # -----------------------------
+       if not rows:
+           return
+       try:
+           df = pd.DataFrame(rows)
+           if 'record_date' in df.columns:
+               df['record_date'] = pd.to_datetime(df['record_date'], errors='coerce')
+               df.dropna(subset=['record_date'], inplace=True)
 
-            df = pd.DataFrame(rows)
-            if 'record_date' in df.columns:
-                df['record_date'] = pd.to_datetime(df['record_date'], errors='coerce')
-                df.dropna(subset=['record_date'], inplace=True)
+           if df.empty:
+               self._update_status("ℹ️ Нет корректных данных для загрузки после очистки.", -1)
+               return
 
-            if df.empty:
-                self._update_status("ℹ️ Нет корректных данных для загрузки после очистки дат.", -1)
-                return
+           table_id = f"{self.bq_dataset_id}.{self.bq_target_table}"
 
-            table_id = f"{self.bq_project_id}.{self.bq_dataset_id}.{self.bq_target_table}"
-            
-            # --- НАЧАЛО ДИАГНОСТИЧЕСКОГО БЛОКА BIGQUERY ---
-            print("--- BIGQUERY DIAGNOSTICS ---")
-            print("DataFrame Info:")
-            df.info(verbose=True, show_counts=True)
-            print("DataFrame Head:")
-            print(df.head().to_string())
-            print("----------------------------")
-            # --- КОНЕЦ ДИАГНОСТИЧЕСКОГО БЛОКА ---            
-            
-            job = self.bq_client.load_table_from_dataframe(df, table_id)
-            job.result()
-            self._update_status(f"💾 Сохранен батч из {len(df)} сессий в {table_id}", -1)
-        except Exception as e:
-            self._update_status(f"❌ Ошибка загрузки в BigQuery: {e}", -1)
+           # --- НОВЫЙ, НАДЕЖНЫЙ МЕТОД ЗАГРУЗКИ ---
+           pandas_gbq.to_gbq(
+               df,
+               destination_table=table_id,
+               project_id=self.bq_project_id,
+               if_exists='append',  # Добавляем данные к существующей таблице
+               credentials=self.bq_client.credentials
+           )
+           self._update_status(f"💾 Успешно загружен батч из {len(df)} сессий в {table_id}", -1)
+
+       except Exception as e:
+           # Выводим более подробную информацию об ошибке для отладки
+           import traceback
+           self._update_status(f"❌ Ошибка загрузки в BigQuery: {e}\n{traceback.format_exc()}", -1)
 
     def run(self):
         self.start_time = datetime.now()
