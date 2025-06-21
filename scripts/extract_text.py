@@ -158,6 +158,24 @@ class TextExtractionProcessor:
                     if not self.tesseract_available: continue
                     with zip_file.open(fname) as file:
                         img = Image.open(file)
+                        
+                        # --- НАЧАЛО ДИАГНОСТИЧЕСКОГО БЛОКА TESSERACT ---
+                        print("--- TESSERACT DIAGNOSTICS ---")
+                        tessdata_dir = '/usr/share/tesseract-ocr/5/tessdata'
+                        print(f"Checking for content in: {tessdata_dir}")
+                        try:
+                            # Пытаемся прочитать содержимое папки
+                            dir_contents = os.listdir(tessdata_dir)
+                            print(f"Directory content: {dir_contents}")
+                            if 'eng.traineddata' in dir_contents:
+                                print(">>> eng.traineddata НАЙДЕН! <<<")
+                            else:
+                                print(">>> eng.traineddata НЕ НАЙДЕН! <<<")
+                        except Exception as e:
+                            print(f"Could not list directory: {e}")
+                        print("-----------------------------")
+                        # --- КОНЕЦ ДИАГНОСТИЧЕСКОГО БЛОКА ---                        
+                        
                         text = pytesseract.image_to_string(img, lang='eng')
                         if 'summary' in fname: data['summary'] = text
                         elif 'sentiment' in fname: data['sentiment'] = text
@@ -211,6 +229,16 @@ class TextExtractionProcessor:
                 return
 
             table_id = f"{self.bq_project_id}.{self.bq_dataset_id}.{self.bq_target_table}"
+            
+            # --- НАЧАЛО ДИАГНОСТИЧЕСКОГО БЛОКА BIGQUERY ---
+            print("--- BIGQUERY DIAGNOSTICS ---")
+            print("DataFrame Info:")
+            df.info(verbose=True, show_counts=True)
+            print("DataFrame Head:")
+            print(df.head().to_string())
+            print("----------------------------")
+            # --- КОНЕЦ ДИАГНОСТИЧЕСКОГО БЛОКА ---            
+            
             job = self.bq_client.load_table_from_dataframe(df, table_id)
             job.result()
             self._update_status(f"💾 Сохранен батч из {len(df)} сессий в {table_id}", -1)
