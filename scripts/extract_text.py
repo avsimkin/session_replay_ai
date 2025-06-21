@@ -29,6 +29,9 @@ except ImportError:
 
 class TextExtractionProcessor:
     def __init__(self, status_callback: Optional[Callable[[str, int], None]] = None):
+        # --- ДИАГНОСТИЧЕСКАЯ ПРОВЕРКА ---
+        print("<<<<< ЗАПУЩЕНА ВЕРСИЯ КОДА С ПРОВЕРКОЙ ОШИБКИ! >>>>>")
+        raise ValueError("ЭТО ТЕСТОВАЯ ОШИБКА ДЛЯ ПРОВЕРКИ ДЕПЛОЯ") 
         self.status_callback = status_callback
         self.credentials_path = settings.GOOGLE_APPLICATION_CREDENTIALS
         self.gdrive_folder_id = settings.GDRIVE_FOLDER_ID
