@@ -207,9 +207,9 @@ class TextExtractionProcessor:
         try:
             df = pd.DataFrame(rows)
             
-            # КРИТИЧЕСКОЕ ИЗМЕНЕНИЕ: убираем session_replay_url из схемы
-            if 'session_replay_url' in df.columns:
-                df = df.drop('session_replay_url', axis=1)
+            # КРИТИЧЕСКОЕ ИЗМЕНЕНИЕ: убираем только session_replay_id (его нет в схеме)
+            if 'session_replay_id' in df.columns:
+                df = df.drop('session_replay_id', axis=1)
             
             if 'record_date' in df.columns:
                 df['record_date'] = pd.to_datetime(df['record_date'], errors='coerce')
