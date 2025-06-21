@@ -225,8 +225,7 @@ class TextExtractionProcessor:
                df,
                destination_table=table_id,
                project_id=self.bq_project_id,
-               if_exists='append',  # Добавляем данные к существующей таблице
-               credentials=self.bq_client.credentials
+               if_exists='append',
            )
            self._update_status(f"💾 Успешно загружен батч из {len(df)} сессий в {table_id}", -1)
 
