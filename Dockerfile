@@ -1,15 +1,16 @@
 # Шаг 1: Используем официальный образ от Microsoft, где уже есть Python и ВСЕ зависимости Playwright
 FROM mcr.microsoft.com/playwright/python:v1.52.0-jammy
 
-# --- НОВЫЕ СТРОКИ ДЛЯ УСТАНОВКИ TESSERACT OCR ---
-# Обновляем списки пакетов и устанавливаем Tesseract + пакет для английского языка
+# --- ОБНОВЛЕННЫЙ БЛОК ДЛЯ УСТАНОВКИ TESSERACT ---
+# Устанавливаем переменную для неинтерактивной установки, чтобы избежать лишних вопросов
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Обновляем списки пакетов и устанавливаем Tesseract + английский и русский языки (на всякий случай)
 RUN apt-get update && apt-get install -y \
     tesseract-ocr \
     tesseract-ocr-eng \
+    tesseract-ocr-rus \
     && rm -rf /var/lib/apt/lists/*
-
-# Устанавливаем переменную окружения, чтобы Tesseract точно знал, где искать языки
-ENV TESSDATA_PREFIX=/usr/share/tesseract-ocr/5/tessdata
 # ----------------------------------------------------
 
 # Шаг 2: Устанавливаем рабочую директорию внутри контейнера
