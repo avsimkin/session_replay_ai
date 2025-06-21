@@ -187,16 +187,29 @@ class TextExtractionProcessor:
         return False
 
     def upload_to_bigquery(self, rows):
-        if not rows: return
+        if not rows:
+            return
         try:
+            # --- ДИАГНОСТИЧЕСКИЙ PRINT ---
+            # Проверяем первые 5 записей на наличие и тип record_date
+            print("--- Проверка данных перед загрузкой в BigQuery ---")
+            for i, r in enumerate(rows[:5]): # Смотрим только первые 5, чтобы не засорять лог
+                if 'record_date' in r:
+                    print(f"Запись {i}: record_date={r['record_date']}, тип={type(r['record_date'])}")
+                else:
+                    print(f"Запись {i}: КЛЮЧ 'record_date' ОТСУТСТВУЕТ!")
+            print("-------------------------------------------------")
+            # -----------------------------
+
             df = pd.DataFrame(rows)
             if 'record_date' in df.columns:
                 df['record_date'] = pd.to_datetime(df['record_date'], errors='coerce')
                 df.dropna(subset=['record_date'], inplace=True)
-        if df.empty:
-            self._update_status("ℹ️ Нет корректных данных для загрузки после очистки дат.", -1)
-            return
-            
+
+            if df.empty:
+                self._update_status("ℹ️ Нет корректных данных для загрузки после очистки дат.", -1)
+                return
+
             table_id = f"{self.bq_project_id}.{self.bq_dataset_id}.{self.bq_target_table}"
             job = self.bq_client.load_table_from_dataframe(df, table_id)
             job.result()
