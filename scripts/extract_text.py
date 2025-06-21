@@ -190,10 +190,13 @@ class TextExtractionProcessor:
         if not rows: return
         try:
             df = pd.DataFrame(rows)
-            # --- Добавь эту строку ---
             if 'record_date' in df.columns:
                 df['record_date'] = pd.to_datetime(df['record_date'], errors='coerce')
-            # -------------------------
+                df.dropna(subset=['record_date'], inplace=True)
+        if df.empty:
+            self._update_status("ℹ️ Нет корректных данных для загрузки после очистки дат.", -1)
+            return
+            
             table_id = f"{self.bq_project_id}.{self.bq_dataset_id}.{self.bq_target_table}"
             job = self.bq_client.load_table_from_dataframe(df, table_id)
             job.result()

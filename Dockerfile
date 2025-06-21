@@ -1,17 +1,18 @@
 # Шаг 1: Используем официальный образ от Microsoft, где уже есть Python и ВСЕ зависимости Playwright
 FROM mcr.microsoft.com/playwright/python:v1.52.0-jammy
 
-# --- ОБНОВЛЕННЫЙ БЛОК ДЛЯ УСТАНОВКИ TESSERACT ---
-# Устанавливаем переменную для неинтерактивной установки, чтобы избежать лишних вопросов
 ENV DEBIAN_FRONTEND=noninteractive
 
-# Обновляем списки пакетов и устанавливаем Tesseract + английский и русский языки (на всякий случай)
 RUN apt-get update && apt-get install -y \
     tesseract-ocr \
     tesseract-ocr-eng \
     tesseract-ocr-rus \
     && rm -rf /var/lib/apt/lists/*
-# ----------------------------------------------------
+
+# Диагностический шаг: Находим реальный путь к файлам tessdata и устанавливаем его в переменную
+RUN TESSDATA_PATH=$(find /usr/share -name "tessdata") && \
+    echo "Found tessdata at: $TESSDATA_PATH" && \
+    export TESSDATA_PREFIX=$(dirname "$TESSDATA_PATH")
 
 # Шаг 2: Устанавливаем рабочую директорию внутри контейнера
 WORKDIR /app
