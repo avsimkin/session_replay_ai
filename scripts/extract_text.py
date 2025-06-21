@@ -42,13 +42,12 @@ class TextExtractionProcessor:
         self.max_runtime_minutes = int(os.environ.get('OCR_MAX_RUNTIME_MINUTES', '25'))
         self.save_frequency = int(os.environ.get('OCR_SAVE_FREQUENCY', '5'))
         
-        # --- ИСПРАВЛЕНИЕ: Добавлены недостающие атрибуты ---
+        # Добавлены недостающие атрибуты
         self.start_time = None
         self.total_processed = 0
         self.total_successful = 0
         self.total_failed = 0
-        self.tesseract_available = True # По умолчанию считаем, что Tesseract доступен
-        # ----------------------------------------------------
+        self.tesseract_available = True
         
         self._update_status("🔐 Настраиваем подключения...", 1)
         self._init_clients()
@@ -150,37 +149,33 @@ class TextExtractionProcessor:
             raise
 
     def process_zip_session(self, session, zip_file):
+        # ИСПРАВЛЕНИЕ: сохраняем оригинальную логику, но убираем session_replay_url через **session
         data = {'session_id': session['session_replay_id'], 'amplitude_id': session['amplitude_id'], **session}
+        # Добавляем поля для OCR данных
+        data.update({
+            'summary': '',
+            'sentiment': '', 
+            'actions': ''
+        })
         screenshots_count = 0
         try:
             for fname in zip_file.namelist():
                 if fname.lower().endswith('.png'):
                     screenshots_count += 1
-                    if not self.tesseract_available: continue
+                    if not self.tesseract_available: 
+                        continue
                     with zip_file.open(fname) as file:
                         img = Image.open(file)
                         
-                        # --- НАЧАЛО ДИАГНОСТИЧЕСКОГО БЛОКА TESSERACT ---
-                        print("--- TESSERACT DIAGNOSTICS ---")
-                        tessdata_dir = '/usr/share/tesseract-ocr/5/tessdata'
-                        print(f"Checking for content in: {tessdata_dir}")
-                        try:
-                            # Пытаемся прочитать содержимое папки
-                            dir_contents = os.listdir(tessdata_dir)
-                            print(f"Directory content: {dir_contents}")
-                            if 'eng.traineddata' in dir_contents:
-                                print(">>> eng.traineddata НАЙДЕН! <<<")
-                            else:
-                                print(">>> eng.traineddata НЕ НАЙДЕН! <<<")
-                        except Exception as e:
-                            print(f"Could not list directory: {e}")
-                        print("-----------------------------")
-                        # --- КОНЕЦ ДИАГНОСТИЧЕСКОГО БЛОКА ---                        
+                        # ИСПРАВЛЕНИЕ: убран диагностический блок Tesseract
                         
                         text = pytesseract.image_to_string(img, lang='eng')
-                        if 'summary' in fname: data['summary'] = text
-                        elif 'sentiment' in fname: data['sentiment'] = text
-                        elif 'actions' in fname: data['actions'] = text
+                        if 'summary' in fname: 
+                            data['summary'] = text
+                        elif 'sentiment' in fname: 
+                            data['sentiment'] = text
+                        elif 'actions' in fname: 
+                            data['actions'] = text
         except Exception as e:
             self._update_status(f"❌ Ошибка обработки архива: {e}", -1)
         return data, screenshots_count
@@ -206,35 +201,43 @@ class TextExtractionProcessor:
         return False
 
     def upload_to_bigquery(self, rows):
-       if not rows:
-           return
-       try:
-           df = pd.DataFrame(rows)
-           if 'record_date' in df.columns:
-               df['record_date'] = pd.to_datetime(df['record_date'], errors='coerce')
-               df.dropna(subset=['record_date'], inplace=True)
+        # ИСПРАВЛЕНИЕ: переписан метод с учетом всех изменений
+        if not rows:
+            return
+        try:
+            df = pd.DataFrame(rows)
+            
+            # КРИТИЧЕСКОЕ ИЗМЕНЕНИЕ: убираем session_replay_url из схемы
+            if 'session_replay_url' in df.columns:
+                df = df.drop('session_replay_url', axis=1)
+            
+            if 'record_date' in df.columns:
+                df['record_date'] = pd.to_datetime(df['record_date'], errors='coerce')
+                df.dropna(subset=['record_date'], inplace=True)
 
-           if df.empty:
-               self._update_status("ℹ️ Нет корректных данных для загрузки после очистки.", -1)
-               return
+            if df.empty:
+                self._update_status("ℹ️ Нет корректных данных для загрузки после очистки.", -1)
+                return
 
-           table_id = f"{self.bq_dataset_id}.{self.bq_target_table}"
+            table_id = f"{self.bq_dataset_id}.{self.bq_target_table}"
+            
+            print(f"📊 Колонки для загрузки: {list(df.columns)}")
 
-           # --- НОВЫЙ, НАДЕЖНЫЙ МЕТОД ЗАГРУЗКИ ---
-           pandas_gbq.to_gbq(
-               df,
-               destination_table=table_id,
-               project_id=self.bq_project_id,
-               if_exists='append',
-           )
-           self._update_status(f"💾 Успешно загружен батч из {len(df)} сессий в {table_id}", -1)
+            pandas_gbq.to_gbq(
+                df,
+                destination_table=table_id,
+                project_id=self.bq_project_id,
+                if_exists='append',
+            )
+            self._update_status(f"💾 Успешно загружен батч из {len(df)} сессий в {table_id}", -1)
 
-       except Exception as e:
-           # Выводим более подробную информацию об ошибке для отладки
-           import traceback
-           self._update_status(f"❌ Ошибка загрузки в BigQuery: {e}\n{traceback.format_exc()}", -1)
+        except Exception as e:
+            import traceback
+            self._update_status(f"❌ Ошибка загрузки в BigQuery: {e}", -1)
+            print(f"🔍 Трейсбек: {traceback.format_exc()}")
 
     def run(self):
+        # ИСПРАВЛЕНИЕ: правильный отступ метода класса
         self.start_time = datetime.now()
         self._update_status("🔄 ЗАПУСК ОБРАБОТКИ OCR ТЕКСТА", 20)
         sessions = self.get_processed_sessions()
@@ -274,7 +277,8 @@ class TextExtractionProcessor:
                 self.upload_to_bigquery(all_data)
                 all_data = []
 
-        if all_data: self.upload_to_bigquery(all_data)
+        if all_data: 
+            self.upload_to_bigquery(all_data)
 
         total_time = datetime.now() - self.start_time
         result = {"status": "completed", "total_processed": self.total_processed, "successful": self.total_successful, "failed": self.total_failed}
