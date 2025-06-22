@@ -291,7 +291,7 @@ class TextExtractionProcessor:
             self.tesseract_available = False
 
     def get_processed_sessions(self, limit=None):
-        if limit is None: limit = self.batch_size * 10
+        if limit is None: limit = 1000  # ✅ ИСПРАВЛЕНО: Увеличиваем лимит с 200 до 1000
         query = f"""
         SELECT s.session_replay_url, s.amplitude_id, s.session_replay_id, s.duration_seconds, s.events_count, s.record_date
         FROM `{self.bq_project_id}.{self.bq_dataset_id}.{self.bq_source_table}` s
@@ -306,7 +306,7 @@ class TextExtractionProcessor:
         except Exception as e:
             self._update_status(f"❌ Ошибка получения сессий: {e}", -1)
             raise
-
+            
     def find_zip_for_session(self, session_id):
         search_patterns = [f"name contains '{session_id}' and name contains '.zip' and '{self.gdrive_folder_id}' in parents"]
         for i, query in enumerate(search_patterns):
@@ -451,10 +451,6 @@ class TextExtractionProcessor:
         try:
             df = pd.DataFrame(unique_rows)
             
-            if 'record_date' in df.columns:
-                df['record_date'] = pd.to_datetime(df['record_date'], errors='coerce')
-                df.dropna(subset=['record_date'], inplace=True)
-
             if df.empty:
                 self._update_status("ℹ️ Нет корректных данных для загрузки", -1)
                 return
