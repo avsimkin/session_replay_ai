@@ -291,7 +291,7 @@ class TextExtractionProcessor:
             self.tesseract_available = False
 
     def get_processed_sessions(self, limit=None):
-        if limit is None: limit = 200  # ✅ ИСПРАВЛЕНО: Увеличиваем лимит с 200 до 1000
+        if limit is None: limit = 1600  # ✅ ИСПРАВЛЕНО: Увеличиваем лимит с 200 до 1000
         query = f"""
         SELECT s.session_replay_url, s.amplitude_id, s.session_replay_id, s.duration_seconds, s.events_count, s.record_date
         FROM `{self.bq_project_id}.{self.bq_dataset_id}.{self.bq_source_table}` s
