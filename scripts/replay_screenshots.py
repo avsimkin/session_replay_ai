@@ -218,9 +218,7 @@ class RenderScreenshotCollector:
                 ]
             )
             self.bq_client.query(update_query, job_config=job_config).result()
-            # Логирование происходит в основном процессе, здесь просто выполняем действие
         except Exception as e:
-            # Выводим ошибку, т.к. это может быть важно для отладки
             print(f"[{datetime.now().strftime('%H:%M:%S')}] ❌ Ошибка обновления статуса URL {url}: {e}")
 
     def get_session_id_from_url(self, url):
@@ -241,7 +239,7 @@ class RenderScreenshotCollector:
                     txt = el.inner_text().strip()
                     if txt and all(bad not in txt for bad in bad_texts) and len(txt) >= min_text_length:
                         return el
-                except PlaywrightError: # Элемент мог исчезнуть
+                except PlaywrightError:
                     pass
             if time.time() - start > timeout:
                 return None
@@ -503,9 +501,6 @@ class RenderScreenshotCollector:
         return False
 
     def process_batch(self, urls_batch, safety_settings):
-        """
-        Обрабатывает батч URL, запуская каждую в отдельном процессе с таймаутом.
-        """
         batch_start_time = time.time()
         batch_successful = 0
         batch_failed = 0
@@ -525,7 +520,10 @@ class RenderScreenshotCollector:
             
             process = multiprocessing.Process(target=worker_process_url, args=(collector_config, url_data, result_queue))
             process.start()
+            
+            self._update_status(f"    Ждем завершения процесса (PID: {process.pid})", -1)
             process.join(timeout=PROCESS_TIMEOUT_PER_URL)
+            self._update_status(f"    Процесс (PID: {process.pid}) завершил ожидание.", -1)
 
             if process.is_alive():
                 self._update_status(f"❗ ТАЙМАУТ! Процесс для URL ...{url_data['url'][-40:]} завис. Завершаем принудительно.", -1)
@@ -566,7 +564,6 @@ class RenderScreenshotCollector:
         return batch_successful, batch_failed
         
     def run(self):
-        """Основной метод непрерывной обработки - работает пока есть URL"""
         self.start_time = time.time()
         
         self._update_status("🔄 ЗАПУСК НЕПРЕРЫВНОЙ ОБРАБОТКИ СКРИНШОТОВ", 10)
@@ -636,9 +633,13 @@ class RenderScreenshotCollector:
 
 
 def main():
-    """
-    Основная функция для запуска в Render
-    """
+    # --- КЛЮЧЕВОЕ ИЗМЕНЕНИЕ ДЛЯ СТАБИЛЬНОСТИ ---
+    # Принудительно устанавливаем 'spawn' как метод создания дочерних процессов.
+    # Это предотвращает 'deadlock' из-за унаследованных сетевых соединений в Linux.
+    # Эту строку нужно вызвать до создания любых процессов или очередей.
+    if sys.platform != 'win32':
+        multiprocessing.set_start_method('spawn', force=True)
+
     multiprocessing.freeze_support()
     try:
         def console_status_callback(details: str, progress: int):
@@ -656,7 +657,7 @@ def main():
         return result
 
     except Exception as e:
-        print(f"❌ Критическая ошибка: {e}")
+        print(f"❌ Критическая ошибка при запуске: {e}")
         import traceback
         traceback.print_exc()
         return {"status": "error", "error": str(e)}
