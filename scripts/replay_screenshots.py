@@ -574,12 +574,34 @@ class RenderScreenshotCollector:
             process.join(timeout=PROCESS_TIMEOUT_PER_URL)
 
             if process.is_alive():
-                self._update_status(f"❗ ТАЙМАУТ! Процесс для URL ...{url_data['url'][-40:]} завис. Завершаем принудительно.", -1)
-                process.terminate()
-                process.join()
-                batch_timeouts += 1
-                batch_failed += 1
-                self.mark_url_as_processed(url_data['url'], success=False)
+                try:
+                    self._update_status(f"❗ ТАЙМАУТ! Процесс для URL ...{url_data['url'][-40:]} завис. Завершаем принудительно.", -1)
+                    
+                    # 1. Сначала пытаемся завершить процесс штатно (сигнал TERM)
+                    process.terminate()
+                    # Даем системе 5 секунд на завершение
+                    process.join(timeout=5)
+                    
+                    # 2. Если процесс все еще жив, используем более сильный метод (сигнал KILL)
+                    if process.is_alive():
+                        self._update_status(f"⚠️ Процесс не ответил на terminate(), используем kill()", -1)
+                        process.kill()
+                        process.join(timeout=5) # Ждем еще раз для очистки
+
+                    batch_timeouts += 1
+                    batch_failed += 1
+                    
+                    self._update_status(f"    Обновляем статус в BigQuery для зависшего URL...", -1)
+                    self.mark_url_as_processed(url_data['url'], success=False)
+                    self._update_status(f"    Статус обновлен.", -1)
+
+                except Exception as e:
+                    self._update_status(f"❌ КРИТИЧЕСКАЯ ОШИБКА во время обработки таймаута! {e}", -1)
+                    # Главное - не падать. Просто считаем это ошибкой и идем дальше.
+                    if 'batch_failed' not in locals(): batch_failed = 0
+                    if 'batch_timeouts' not in locals(): batch_timeouts = 0
+                    batch_failed += 1
+                    batch_timeouts += 1
             else:
                 try:
                     success = result_queue.get_nowait()
