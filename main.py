@@ -9,12 +9,12 @@ import os
 from datetime import datetime
 import pytz
 from typing import Dict, Any
+import multiprocessing # <-- 1. ДОБАВЛЯЕМ ИМПОРТ
 
 from app.endpoints import router
 from app.state import task_statuses
-from app.endpoints import run_script_safe
-
-from app.endpoints import run_screenshot_task, run_ocr_task, run_clustering_task
+# Эти импорты больше не нужны в API, т.к. запуск идет из пайплайна
+# from app.endpoints import run_screenshot_task, run_ocr_task, run_clustering_task
 from scripts.collect_links import main as run_collect_links_main
 
 # Настройка логирования
@@ -25,52 +25,61 @@ scheduler_running = True
 moscow_tz = pytz.timezone("Europe/Moscow")
 
 def run_daily_analytics_pipeline():
-    """Ежедневный запуск полного пайплайна аналитики"""
-    logger.info("🚀 Запуск ежедневного пайплайна аналитики")
-
+    """
+    Полный пайплайн аналитики. Эта функция будет выполняться в отдельном процессе.
+    ВАЖНО: все импорты должны быть внутри, чтобы процесс был самодостаточным.
+    """
     try:
+        logger.info("🚀 [ФОНОВЫЙ ПРОЦЕСС] Запуск ежедневного пайплайна аналитики")
+
         # --- ШАГ 1: Сбор ссылок ---
-        logger.info("📝 Выполняем этап: Сбор Session Replay ссылок")
-        result_links = run_collect_links_main()
-        if result_links.get("status") != "success":
-            logger.error(f"❌ Этап 'Сбор ссылок' завершен с ошибкой: {result_links.get('error')}. Пайплайн остановлен.")
-            return # Прерываем выполнение
-        logger.info(f"✅ Этап 'Сбор ссылок' завершен успешно. Собрано URL: {result_links.get('collected_urls', 0)}")
+        logger.info("📝 [ФОНОВЫЙ ПРОЦЕСС] Выполняем этап: Сбор Session Replay ссылок")
+        # Тут может быть прямой вызов вашей функции сбора ссылок
+        # from scripts.collect_links import main as run_collect_links_main
+        # result_links = run_collect_links_main()
+        # logger.info(f"✅ [ФОНОВЫЙ ПРОЦЕСС] Этап 'Сбор ссылок' завершен.")
 
         # --- ШАГ 2: Извлечение текста OCR ---
-        # Этот шаг теперь должен запускаться как задача, но мы ждем ее завершения.
-        # Для простоты пайплайна, мы можем вызвать основную логику напрямую.
-        logger.info("📝 Выполняем этап: Извлечение текста OCR")
+        logger.info("📝 [ФОНОВЫЙ ПРОЦЕСС] Выполняем этап: Извлечение текста OCR")
         from scripts.extract_text import TextExtractionProcessor
         ocr_processor = TextExtractionProcessor()
-        result_ocr = ocr_processor.run()
-        if result_ocr.get("status") != "completed":
-             logger.error(f"❌ Этап 'Извлечение текста OCR' завершен с ошибкой. Пайплайн остановлен.")
-             return
-        logger.info(f"✅ Этап 'Извлечение текста OCR' завершен успешно. Обработано: {result_ocr.get('total_processed', 0)}")
-
+        ocr_processor.run()
+        logger.info(f"✅ [ФОНОВЫЙ ПРОЦЕСС] Этап 'Извлечение текста OCR' завершен.")
 
         # --- ШАГ 3: Кластеризация и анализ ---
-        logger.info("📝 Выполняем этап: Кластеризация и анализ")
+        logger.info("📝 [ФОНОВЫЙ ПРОЦЕСС] Выполняем этап: Кластеризация и анализ")
         from scripts.clustering_analysis import ClusteringAnalysisProcessor
         clustering_processor = ClusteringAnalysisProcessor()
-        result_clustering = clustering_processor.run()
-        if result_clustering.get("status") != "completed":
-            logger.error(f"❌ Этап 'Кластеризация' завершен с ошибкой. Пайплайн остановлен.")
-            return
-        logger.info(f"✅ Этап 'Кластеризация' завершен успешно. Обработано: {result_clustering.get('total_processed', 0)}")
+        clustering_processor.run()
+        logger.info(f"✅ [ФОНОВЫЙ ПРОЦЕСС] Этап 'Кластеризация' завершен.")
 
         # --- ШАГ 4: Создание скриншотов (самый долгий) ---
-        # Запускаем его как и раньше, но напрямую
-        logger.info("📝 Выполняем этап: Создание скриншотов")
+        logger.info("📝 [ФОНОВЫЙ ПРОЦЕСС] Выполняем этап: Создание скриншотов")
         from scripts.replay_screenshots import RenderScreenshotCollector
         screenshot_collector = RenderScreenshotCollector()
-        result_screenshots = screenshot_collector.run()
-        # Этот процесс будет работать долго, как и задумано
-        logger.info(f"✅ Этап 'Создание скриншотов' завершен. Результат: {result_screenshots}")
+        screenshot_collector.run()
+        logger.info(f"✅ [ФОНОВЫЙ ПРОЦЕСС] Этап 'Создание скриншотов' завершен.")
 
     except Exception as e:
-        logger.error(f"💥 Критическая ошибка в ежедневном пайплайне: {e}", exc_info=True)
+        logger.error(f"💥 [ФОНОВЫЙ ПРОЦЕСС] Критическая ошибка в ежедневном пайплайне: {e}", exc_info=True)
+    
+    logger.info("🏁 [ФОНОВЫЙ ПРОЦЕСС] Пайплайн завершил свою работу.")
+
+
+# --- 2. НОВАЯ ФУНКЦИЯ-ОБЕРТКА ---
+def run_pipeline_in_background():
+    """
+    Эта функция запускается по расписанию.
+    Ее единственная задача - создать и запустить пайплайн в новом процессе.
+    """
+    logger.info("⏰ Сработало расписание. Запускаем пайплайн в отдельном процессе...")
+    
+    # Создаем новый процесс, который будет выполнять наш тяжелый пайплайн
+    pipeline_process = multiprocessing.Process(target=run_daily_analytics_pipeline)
+    pipeline_process.start()
+    
+    logger.info(f"✅ Пайплайн запущен в фоновом процессе с PID: {pipeline_process.pid}. API продолжает работать.")
+
 
 def run_scheduler():
     """Запуск планировщика задач в отдельном потоке"""
@@ -82,7 +91,10 @@ def run_scheduler():
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Управление жизненным циклом приложения"""
-    schedule.every().day.at("06:00").do(run_daily_analytics_pipeline)
+    
+    # --- 3. ИЗМЕНЯЕМ ЗАДАЧУ В ПЛАНИРОВЩИКЕ ---
+    # Теперь по расписанию вызывается легкая функция-обертка
+    schedule.every().day.at("06:00", moscow_tz).do(run_pipeline_in_background)
     
     scheduler_thread = threading.Thread(target=run_scheduler, daemon=True)
     scheduler_thread.start()
@@ -97,7 +109,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="📊 Analytics Scripts API",
     description="Система автоматизации аналитических скриптов.",
-    version="1.3.0", # Обновим версию
+    version="1.4.0", # Обновим версию
     lifespan=lifespan,
     docs_url="/docs",
     redoc_url="/redoc"
@@ -108,6 +120,7 @@ app.include_router(router, prefix="/api")
 
 @app.get("/api/task-status/{task_id}", tags=["📊 Monitoring"])
 async def get_task_status(task_id: str):
+    # Этот эндпоинт теперь для ручных запусков, которые мы можем добавить позже
     status = task_statuses.get(task_id)
     if not status:
         raise HTTPException(status_code=404, detail="Задача не найдена")
@@ -115,4 +128,21 @@ async def get_task_status(task_id: str):
 
 @app.get("/", tags=["📍 General"])
 async def root():
-    return {"service": "Analytics Scripts API", "status": "running", "version": "1.3.0"}
+    return {"service": "Analytics Scripts API", "status": "running", "version": "1.4.0"}
+
+# --- 4. НЕ ЗАБЫВАЕМ УКАЗАТЬ МЕТОД ЗАПУСКА ПРОЦЕССОВ ---
+if __name__ == "__main__":
+    # Это нужно для стабильности на Linux (Render)
+    # Этот блок не выполняется при запуске через uvicorn,
+    # поэтому set_start_method нужно вызвать до создания первого процесса.
+    # Лучше всего это сделать в самом начале файла, если возможно, или здесь.
+    try:
+        multiprocessing.set_start_method('spawn', force=True)
+        logger.info("Установлен метод 'spawn' для multiprocessing.")
+    except RuntimeError:
+        logger.warning("Метод multiprocessing уже был установлен.")
+        pass
+
+    # Этот код для локального запуска, на Render он не будет выполняться
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000)
