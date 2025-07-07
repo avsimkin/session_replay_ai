@@ -275,49 +275,85 @@ class RenderScreenshotCollector:
             if 'archive_path' in locals() and os.path.exists(archive_path):
                 os.remove(archive_path)
 
-    def process_single_url(self, page, url_data):
+def process_single_url(self, page, url_data):
         url = url_data['url']
         session_id = self.get_session_id_from_url(url)
         temp_screenshots_dir = tempfile.mkdtemp(prefix=f"screenshots_{session_id}_")
-        REQUIRED_BLOCKS = ['summary', 'sentiment']
+        REQUIRED_BLOCKS = ['userinfo', 'summary', 'sentiment']
         screenshot_paths = []
+        
         try:
             print(f"▶️ Обрабатываем сессию: {session_id}")
-            page.goto(url, timeout=60000, wait_until='domcontentloaded')
             
+            # --- УЛУЧШЕНИЕ 1: БОЛЕЕ НАДЕЖНОЕ ОЖИДАНИЕ ЗАГРУЗКИ ---
+            # Вместо domcontentloaded ждем, пока сетевая активность не прекратится
+            page.goto(url, timeout=90000, wait_until='networkidle')
+            print("    Страница загружена, даем 5-10 секунд на прогрузку интерфейса...")
+            time.sleep(random.uniform(5, 10))
+
             if "/login" in page.url:
                 login_successful = self.login_and_update_cookies(page)
                 if not login_successful: return False, []
-                print(f"    Возвращаемся к исходной ссылке: ...{url[-40:]}")
-                page.goto(url, timeout=60000, wait_until='domcontentloaded')
+                print(f"    Возвращаемся к исходной ссылке...")
+                page.goto(url, timeout=90000, wait_until='networkidle')
+                time.sleep(random.uniform(5, 10))
 
             try:
-                summary_tab = page.wait_for_selector("text=Summary", timeout=15000)
-            except PlaywrightTimeoutError:
-                print("❌ Вкладка Summary не найдена (timeout)")
-                raise 
-            
-            summary_tab.click()
-            print("🖱️ Кликнули на Summary")
-            page.wait_for_selector('p.ltext-_uoww22', timeout=20000)
-            
+                # --- УЛУЧШЕНИЕ 2: УВЕЛИЧИВАЕМ ТАЙМАУТ И НАДЕЖНОСТЬ КЛИКА ---
+                print("    Ищем вкладку 'Summary'...")
+                # Даем до 45 секунд на появление самого важного элемента
+                summary_tab = page.wait_for_selector("text=Summary", timeout=45000)
+                # Иногда простой клик не срабатывает, используем более надежный метод
+                summary_tab.click(force=True, timeout=5000)
+                print("    Клик на 'Summary' выполнен.")
+                
+                # --- УЛУЧШЕНИЕ 3: ЖДЕМ ПОЯВЛЕНИЯ КОНКРЕТНОГО ЭЛЕМЕНТА ПОСЛЕ КЛИКА ---
+                print("    Ожидаем появления контента во вкладке...")
+                # Ждем именно тот элемент, который не успевал прогрузиться
+                summary_el = page.wait_for_selector('p.ltext-_uoww22', timeout=45000)
+                print("    Контент 'Summary' обнаружен.")
+                time.sleep(random.uniform(2, 4)) # Дополнительная пауза после клика
+
+            except PlaywrightTimeoutError as e:
+                print(f"❌ Не удалось найти или загрузить вкладку 'Summary' для сессии {session_id}")
+                raise e # Вызываем ошибку, чтобы она была поймана ниже
+
+            # --- Ваша оригинальная логика сбора скриншотов ---
+            screenshot_results = {}
             print("📸 Начинаем создание скриншотов...")
-            summary_path = self.screenshot_by_title(page, "Summary", session_id, temp_screenshots_dir)
+            userinfo_path = self.screenshot_userinfo_block(page, session_id, temp_screenshots_dir)
+            screenshot_results['userinfo'] = userinfo_path is not None
+            if userinfo_path: screenshot_paths.append(userinfo_path)
+            
+            summary_paths = self.screenshot_summary_flexible(page, session_id, temp_screenshots_dir, summary_el=summary_el)
+            screenshot_results['summary'] = len(summary_paths) > 0
+            if summary_paths: screenshot_paths.extend(summary_paths)
+            
             sentiment_path = self.screenshot_by_title(page, "Sentiment", session_id, temp_screenshots_dir)
+            screenshot_results['sentiment'] = sentiment_path is not None
+            if sentiment_path: screenshot_paths.append(sentiment_path)
             
-            if not all([summary_path, sentiment_path]):
+            actions_path = self.screenshot_by_title(page, "Actions", session_id, temp_screenshots_dir)
+            screenshot_results['actions'] = actions_path is not None
+            if actions_path: screenshot_paths.append(actions_path)
+
+            all_success = all(screenshot_results.get(block, False) for block in REQUIRED_BLOCKS)
+            if not all_success or len(screenshot_paths) < 3:
                 print(f"❌ Не собраны все обязательные блоки для {session_id}")
-                return False, [p for p in [summary_path, sentiment_path] if p]
+                return False, screenshot_paths
             
-            screenshot_paths = [summary_path, sentiment_path]
-            session_dir = self.create_session_folder_structure(session_id, screenshot_paths, url_data)
+            session_dir, _ = self.create_session_folder_structure(session_id, screenshot_paths, url_data)
             uploaded_file = self.create_and_upload_session_archive(session_dir, session_id)
             return bool(uploaded_file), screenshot_paths
+        
         except Exception as e:
             print(f"❌ Ошибка обработки URL {url}: {e}")
             failure_path = os.path.join(temp_screenshots_dir, f"FAILURE_screenshot.png")
-            try: page.screenshot(path=failure_path, full_page=True, timeout=15000)
-            except Exception as e_scr: print(f"    Не удалось сделать скриншот ошибки: {e_scr}")
+            try:
+                page.screenshot(path=failure_path, full_page=True, timeout=15000)
+                print(f"    Скриншот ошибки сохранен.")
+            except Exception as e_scr:
+                print(f"    Не удалось сделать скриншот ошибки: {e_scr}")
             self.create_and_upload_session_archive(temp_screenshots_dir, session_id, is_failure=True)
             return False, []
         finally:
