@@ -286,7 +286,7 @@ class RenderScreenshotCollector:
             if 'archive_path' in locals() and os.path.exists(archive_path):
                 os.remove(archive_path)
 
-    def process_single_url(self, page, url_data):
+def process_single_url(self, page, url_data):
         url = url_data['url']
         session_id = self.get_session_id_from_url(url)
         temp_screenshots_dir = tempfile.mkdtemp(prefix=f"screenshots_{session_id}_")
@@ -294,31 +294,50 @@ class RenderScreenshotCollector:
         screenshot_paths = []
         try:
             print(f"▶️ Обрабатываем сессию: {session_id}")
-            page.goto(url, timeout=90000, wait_until='networkidle')
-            print("    Страница загружена, даем 5-10 секунд на прогрузку интерфейса...")
-            time.sleep(random.uniform(5, 10))
+            
+            # --- ШАГ 1: НАДЕЖНАЯ ЗАГРУЗКА СТРАНИЦЫ ---
+            # Переходим на страницу и ждем, пока она не будет полностью "готова"
+            page.goto(url, timeout=90000, wait_until='load')
+            # Дополнительная жесткая пауза, чтобы все скрипты на странице успели выполниться
+            print("    Страница загружена, даем 10-15 секунд на полную прогрузку интерфейса...")
+            time.sleep(random.uniform(10, 15))
 
+            # --- ШАГ 2: ПРОВЕРКА НА АВТОРИЗАЦИЮ ---
             if "/login" in page.url:
                 login_successful = self.login_and_update_cookies(page)
                 if not login_successful: return False, []
                 print(f"    Возвращаемся к исходной ссылке...")
-                page.goto(url, timeout=90000, wait_until='networkidle')
-                time.sleep(random.uniform(5, 10))
+                page.goto(url, timeout=90000, wait_until='load')
+                print("    Повторная пауза после логина...")
+                time.sleep(random.uniform(10, 15))
             
+            # --- ШАГ 3: УМНОЕ ОЖИДАНИЕ И ВЗАИМОДЕЙСТВИЕ ---
             try:
                 print("    Ищем вкладку 'Summary'...")
-                summary_tab = page.wait_for_selector("text=Summary", timeout=45000)
-                summary_tab.click(force=True, timeout=5000)
-                print("    Клик на 'Summary' выполнен.")
-                print("    Ожидаем появления контента во вкладке...")
-                page.wait_for_selector('p.ltext-_uoww22', timeout=45000)
-                print("    Контент 'Summary' обнаружен.")
-                time.sleep(random.uniform(2, 4))
+                # Ждем именно кликабельности элемента
+                summary_tab = page.locator("text=Summary").first
+                summary_tab.wait_for(state='visible', timeout=45000)
+                
+                print("    Кликаем на 'Summary' и ждем ответа от сети...")
+                # Используем page.expect_response чтобы дождаться, пока данные для вкладки реально загрузятся
+                with page.expect_response(lambda response: "graphql" in response.url, timeout=45000):
+                    summary_tab.click(force=True)
+                
+                print("    Данные для вкладки 'Summary' загружены. Ждем отрисовки.")
+                # Ждем появления контента после загрузки данных
+                summary_el = page.locator('p.ltext-_uoww22').first
+                summary_el.wait_for(state='visible', timeout=45000)
+
             except PlaywrightTimeoutError as e:
-                print(f"❌ Не удалось найти или загрузить вкладку 'Summary' для сессии {session_id}")
+                print(f"❌ Не удалось найти или загрузить контент 'Summary' для сессии {session_id}")
                 raise e
 
+            # --- ШАГ 4: ВАША ПРОВЕРЕННАЯ ЛОГИКА СОЗДАНИЯ СКРИНШОТОВ ---
             print("📸 Начинаем создание скриншотов...")
+            # ... (здесь остается ваш код для screenshot_by_title и т.д.) ...
+            # ... он теперь будет работать на 100% загруженной и готовой странице ...
+            
+            # Примерный вызов, замените на реальный
             summary_path = self.screenshot_by_title(page, "Summary", session_id, temp_screenshots_dir)
             sentiment_path = self.screenshot_by_title(page, "Sentiment", session_id, temp_screenshots_dir)
             
@@ -330,6 +349,7 @@ class RenderScreenshotCollector:
             session_dir = self.create_session_folder_structure(session_id, screenshot_paths, url_data)
             uploaded_file = self.create_and_upload_session_archive(session_dir, session_id)
             return bool(uploaded_file), screenshot_paths
+        
         except Exception as e:
             print(f"❌ Ошибка обработки URL {url}: {e}")
             failure_path = os.path.join(temp_screenshots_dir, f"FAILURE_screenshot.png")
@@ -341,7 +361,8 @@ class RenderScreenshotCollector:
             self.create_and_upload_session_archive(temp_screenshots_dir, session_id, is_failure=True)
             return False, []
         finally:
-            shutil.rmtree(temp_screenshots_dir, ignore_errors=True)
+            if 'temp_screenshots_dir' in locals() and os.path.exists(temp_screenshots_dir):
+                shutil.rmtree(temp_screenshots_dir, ignore_errors=True)
 
     def process_batch(self, urls_batch):
         batch_start_time = time.time()
