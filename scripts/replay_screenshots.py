@@ -32,21 +32,37 @@ except ImportError:
         BQ_TABLE_ID = os.environ.get('BQ_TABLE_ID', 'session_replay_urls')
     settings = MockSettings()
 
-PROCESS_TIMEOUT_PER_URL = 240  # 4 минуты
+PROCESS_TIMEOUT_PER_URL = 240
 
 USER_AGENTS = [
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15",
 ]
 
-# Функция-воркер, которая будет выполняться в отдельном процессе
+def sanitize_cookies(cookies):
+    """
+    Проверяет и исправляет cookies, чтобы они соответствовали формату Playwright.
+    Учитывает регистр букв и отсутствие ключа.
+    """
+    if not cookies:
+        return []
+    valid_same_site_values = {"Strict", "Lax", "None"}
+    sanitized_cookies = []
+    for cookie in cookies:
+        if cookie.get('sameSite') not in valid_same_site_values:
+            original_value = cookie.get('sameSite', 'КЛЮЧ ОТСУТСТВОВАЛ')
+            print(f"⚠️ Исправляю невалидный/отсутствующий sameSite='{original_value}' на 'Lax' для куки: {cookie.get('name')}")
+            cookie['sameSite'] = 'Lax'
+        sanitized_cookies.append(cookie)
+    return sanitized_cookies
+
+
 def worker_process_url(collector_config: dict, url_data: dict, result_queue: multiprocessing.Queue):
-    """
-    Запускается в отдельном процессе. Создает свой экземпляр коллектора и Playwright.
-    """
+    """ Запускается в отдельном процессе. Создает свой экземпляр коллектора и Playwright. """
     try:
         collector = RenderScreenshotCollector(config_override=collector_config)
-        
+        sanitized_cookies = sanitize_cookies(collector.cookies)
+
         with sync_playwright() as p:
             browser_args = [
                 '--no-proxy-server', '--disable-proxy-config-service', '--no-sandbox',
@@ -62,11 +78,10 @@ def worker_process_url(collector_config: dict, url_data: dict, result_queue: mul
                 locale='en-US', timezone_id='America/New_York'
             )
             context.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined});")
-            context.add_cookies(collector.cookies)
+            context.add_cookies(sanitized_cookies)
             page = context.new_page()
 
             success, _ = collector.process_single_url(page, url_data)
-
             collector.mark_url_as_processed(url_data['url'], success)
             result_queue.put(success)
 
@@ -89,13 +104,11 @@ class RenderScreenshotCollector:
             self.bq_dataset_id = config_override["bq_dataset_id"]
             self.bq_table_id = config_override["bq_table_id"]
             self.min_duration_seconds = config_override["min_duration_seconds"]
-            self.status_callback = None
-            # --- ИСПРАВЛЕНИЕ: Добавляем путь к куки в дочерний процесс ---
             self.cookies_path = config_override["cookies_path"]
+            self.status_callback = None
             self.cookies = self._load_cookies_from_secret_file(verbose=False)
         else:
             self.status_callback = status_callback
-            # --- ИСПРАВЛЕНИЕ: Централизуем путь к файлу куки ---
             self.cookies_path = "/etc/secrets/cookies.json"
             self.credentials_path = settings.GOOGLE_APPLICATION_CREDENTIALS
             self.gdrive_folder_id = settings.GDRIVE_FOLDER_ID
@@ -106,10 +119,8 @@ class RenderScreenshotCollector:
             self.pause_between_batches = int(os.environ.get('PAUSE_BETWEEN_BATCHES', '300'))
             self.max_runtime_hours = int(os.environ.get('MAX_RUNTIME_HOURS', '18'))
             self.min_duration_seconds = int(os.environ.get('MIN_DURATION_SECONDS', '20'))
-            
             self.start_time = None
             self.total_processed, self.total_successful, self.total_failed, self.total_timeouts, self.batches_completed = 0, 0, 0, 0, 0
-            
             self._update_status("🔐 Настраиваем подключения...", 1)
             self.cookies = self._load_cookies_from_secret_file()
         
@@ -118,23 +129,17 @@ class RenderScreenshotCollector:
         self._init_google_drive()
 
     def _update_status(self, details: str, progress: int):
-        if self.status_callback: 
-            self.status_callback(details, progress)
-        if progress != -1: 
-            print(f"[{progress}%] {details}")
-        else:
-            timestamp = datetime.now().strftime("%H:%M:%S")
-            print(f"[{timestamp}] {details}")
+        if self.status_callback: self.status_callback(details, progress)
+        timestamp = datetime.now().strftime("%H:%M:%S")
+        print(f"[{timestamp}] {details}")
 
     def _load_cookies_from_secret_file(self, verbose=True):
-        # --- ИСПРАВЛЕНИЕ: Используем self.cookies_path вместо жестко заданного пути ---
         if verbose: self._update_status(f"Загрузка cookies из {self.cookies_path}...", 2)
         if not os.path.exists(self.cookies_path):
             if verbose: self._update_status(f"❌ Файл cookies не найден!", 2)
             return []
         try:
-            with open(self.cookies_path, 'r') as f: 
-                cookies = json.load(f)
+            with open(self.cookies_path, 'r') as f: cookies = json.load(f)
             if verbose: self._update_status(f"✅ Cookies загружены ({len(cookies)} шт).", 3)
             return cookies
         except Exception as e:
@@ -146,7 +151,6 @@ class RenderScreenshotCollector:
             credentials = service_account.Credentials.from_service_account_file(
                 self.credentials_path, scopes=["https://www.googleapis.com/auth/bigquery"])
             self.bq_client = bigquery.Client(credentials=credentials, project=self.bq_project_id)
-            if self.status_callback: self._update_status("✅ BigQuery подключен", 4)
         except Exception as e:
             raise Exception(f"❌ Ошибка подключения к BigQuery: {e}")
 
@@ -155,7 +159,6 @@ class RenderScreenshotCollector:
             credentials = service_account.Credentials.from_service_account_file(
                 self.credentials_path, scopes=['https://www.googleapis.com/auth/drive'])
             self.drive_service = build('drive', 'v3', credentials=credentials)
-            if self.status_callback: self._update_status("✅ Google Drive подключен", 5)
         except Exception as e:
             raise Exception(f"❌ Ошибка подключения к Google Drive: {e}")
 
@@ -186,7 +189,6 @@ class RenderScreenshotCollector:
             print(f"[{datetime.now().strftime('%H:%M:%S')}] ❌ Ошибка обновления статуса URL {url}: {e}")
 
     def login_and_update_cookies(self, page):
-        """ Выполняет вход в Amplitude, получает и сохраняет новые cookies. """
         print("⚠️ Обнаружена страница входа. Попытка автоматической авторизации...")
         login = os.environ.get('AMPLITUDE_LOGIN')
         password = os.environ.get('AMPLITUDE_PASSWORD')
@@ -233,8 +235,7 @@ class RenderScreenshotCollector:
             
             if "/login" in page.url:
                 login_successful = self.login_and_update_cookies(page)
-                if not login_successful:
-                    return False, []
+                if not login_successful: return False, []
                 print(f"    Возвращаемся к исходной ссылке: ...{url[-40:]}")
                 page.goto(url, timeout=60000, wait_until='domcontentloaded')
 
@@ -285,13 +286,12 @@ class RenderScreenshotCollector:
             return False, []
         finally:
             shutil.rmtree(temp_screenshots_dir, ignore_errors=True)
-
+            
     def process_batch(self, urls_batch, safety_settings):
         batch_start_time = time.time()
         batch_successful, batch_failed, batch_timeouts = 0, 0, 0
         self._update_status(f"🚀 Начинаем обработку батча из {len(urls_batch)} URL с таймаутом {PROCESS_TIMEOUT_PER_URL}с на каждую", -1)
         result_queue = multiprocessing.Queue()
-        # --- ИСПРАВЛЕНИЕ: Передаем путь к куки в дочерний процесс ---
         collector_config = {
             "credentials_path": self.credentials_path, "gdrive_folder_id": self.gdrive_folder_id,
             "bq_project_id": self.bq_project_id, "bq_dataset_id": self.bq_dataset_id,
@@ -326,12 +326,8 @@ class RenderScreenshotCollector:
             else:
                 try:
                     success = result_queue.get_nowait()
-                    if success:
-                        batch_successful += 1
-                        self._update_status(f"✅ Успешно обработан ...{url_data['url'][-40:]}", -1)
-                    else:
-                        batch_failed += 1
-                        self._update_status(f"❌ Ошибка обработки ...{url_data['url'][-40:]}", -1)
+                    if success: batch_successful += 1; self._update_status(f"✅ Успешно обработан ...{url_data['url'][-40:]}", -1)
+                    else: batch_failed += 1; self._update_status(f"❌ Ошибка обработки ...{url_data['url'][-40:]}", -1)
                 except queue.Empty:
                     batch_failed += 1
                     self._update_status(f"❌ Процесс завершился, но не вернул результат. Считаем ошибкой.", -1)
@@ -348,43 +344,6 @@ class RenderScreenshotCollector:
         batch_time = time.time() - batch_start_time
         self._update_status(f"📦 Батч #{self.batches_completed} завершен за {batch_time/60:.1f} мин", -1)
         self._update_status(f"   ✅ Успешно: {batch_successful} | ❌ Ошибок: {batch_failed} | ❗ Зависаний: {batch_timeouts}", -1)
-        
-    # Все остальные методы (get_safety_settings, print_overall_stats, check_runtime_limit, run...) остаются без изменений
-    # ...
-    # Я вставил их полные версии ниже для вашего удобства.
-    
-    def get_safety_settings(self):
-        safety_mode = os.environ.get('SAFETY_MODE', 'normal').lower()
-        if safety_mode == 'slow': return {'min_delay': 3, 'max_delay': 8, 'name': 'МЕДЛЕННЫЙ'}
-        if safety_mode == 'fast': return {'min_delay': 1, 'max_delay': 3, 'name': 'БЫСТРЫЙ'}
-        return {'min_delay': 2, 'max_delay': 5, 'name': 'ОБЫЧНЫЙ'}
-
-    def print_overall_stats(self):
-        if self.start_time:
-            elapsed = time.time() - self.start_time
-            elapsed_hours = elapsed / 3600
-            success_rate = (self.total_successful / self.total_processed * 100) if self.total_processed > 0 else 0
-            self._update_status("=" * 60, -1)
-            self._update_status(f"📊 ОБЩАЯ СТАТИСТИКА РАБОТЫ", -1)
-            self._update_status(f"⏱️  Время работы: {elapsed_hours:.1f} часов", -1)
-            self._update_status(f"🔄 Батчей завершено: {self.batches_completed}", -1)
-            self._update_status(f"📈 Всего обработано: {self.total_processed} URL", -1)
-            self._update_status(f"✅ Успешно: {self.total_successful}", -1)
-            self._update_status(f"❌ Ошибок: {self.total_failed}", -1)
-            self._update_status(f"❗ Зависаний (Timeout): {self.total_timeouts}", -1)
-            self._update_status(f"📊 Процент успеха: {success_rate:.1f}%", -1)
-            if self.total_processed > 0:
-                avg_time_per_url = elapsed / self.total_processed
-                self._update_status(f"⚡ Среднее время на URL: {avg_time_per_url:.1f} сек", -1)
-            self._update_status("=" * 60, -1)
-
-    def check_runtime_limit(self):
-        if self.start_time:
-            elapsed_hours = (time.time() - self.start_time) / 3600
-            if elapsed_hours >= self.max_runtime_hours:
-                self._update_status(f"⏰ Достигнут лимит времени работы ({self.max_runtime_hours}ч)", -1)
-                return True
-        return False
         
     def run(self):
         self.start_time = time.time()
@@ -416,6 +375,48 @@ class RenderScreenshotCollector:
             traceback.print_exc()
         self.print_overall_stats()
 
+    # Вставляем полные версии всех остальных методов, которые были ранее сокращены
+    def get_safety_settings(self):
+        safety_mode = os.environ.get('SAFETY_MODE', 'normal').lower()
+        if safety_mode == 'slow': return {'min_delay': 3, 'max_delay': 8, 'name': 'МЕДЛЕННЫЙ'}
+        if safety_mode == 'fast': return {'min_delay': 1, 'max_delay': 3, 'name': 'БЫСТРЫЙ'}
+        return {'min_delay': 2, 'max_delay': 5, 'name': 'ОБЫЧНЫЙ'}
+        
+    def print_overall_stats(self):
+        if self.start_time:
+            elapsed = time.time() - self.start_time
+            elapsed_hours = elapsed / 3600
+            success_rate = (self.total_successful / self.total_processed * 100) if self.total_processed > 0 else 0
+            self._update_status("=" * 60, -1)
+            self._update_status(f"📊 ОБЩАЯ СТАТИСТИКА РАБОТЫ", -1)
+            self._update_status(f"⏱️  Время работы: {elapsed_hours:.1f} часов", -1)
+            self._update_status(f"🔄 Батчей завершено: {self.batches_completed}", -1)
+            self._update_status(f"📈 Всего обработано: {self.total_processed} URL", -1)
+            self._update_status(f"✅ Успешно: {self.total_successful}", -1)
+            self._update_status(f"❌ Ошибок: {self.total_failed}", -1)
+            self._update_status(f"❗ Зависаний (Timeout): {self.total_timeouts}", -1)
+            self._update_status(f"📊 Процент успеха: {success_rate:.1f}%", -1)
+            if self.total_processed > 0:
+                avg_time_per_url = elapsed / self.total_processed
+                self._update_status(f"⚡ Среднее время на URL: {avg_time_per_url:.1f} сек", -1)
+            self._update_status("=" * 60, -1)
+
+    def check_runtime_limit(self):
+        if self.start_time:
+            elapsed_hours = (time.time() - self.start_time) / 3600
+            if elapsed_hours >= self.max_runtime_hours:
+                self._update_status(f"⏰ Достигнут лимит времени работы ({self.max_runtime_hours}ч)", -1)
+                return True
+        return False
+        
+    def get_session_id_from_url(self, url):
+        url_hash = hashlib.md5(url.encode()).hexdigest()[:8]
+        if "sessionReplayId=" in url:
+            parts = url.split("sessionReplayId=")[1].split("&")[0].split("/")
+            session_replay_id = parts[0]
+            session_start_time = parts[1] if len(parts) > 1 else "unknown"
+            return f"{session_replay_id}_{session_start_time}_{url_hash}"
+        return f"no_session_id_{url_hash}"
 
 def main():
     if sys.platform != 'win32':
