@@ -183,6 +183,15 @@ class RenderScreenshotCollector:
         except Exception as e:
             print(f"[{datetime.now().strftime('%H:%M:%S')}] ❌ Ошибка обновления статуса URL {url}: {e}")
 
+    def get_session_id_from_url(self, url):
+        url_hash = hashlib.md5(url.encode()).hexdigest()[:8]
+        if "sessionReplayId=" in url:
+            parts = url.split("sessionReplayId=")[1].split("&")[0].split("/")
+            session_replay_id = parts[0]
+            session_start_time = parts[1] if len(parts) > 1 else "unknown"
+            return f"{session_replay_id}_{session_start_time}_{url_hash}"
+        return f"no_session_id_{url_hash}"
+
     def login_and_update_cookies(self, page):
         print("⚠️ Обнаружена страница входа. Попытка автоматической авторизации...")
         login = os.environ.get('AMPLITUDE_LOGIN')
@@ -217,22 +226,14 @@ class RenderScreenshotCollector:
                 print("    Скриншот ошибки авторизации сохранен в login_error_screenshot.png")
             except: pass
             return False
-
-    def get_session_id_from_url(self, url):
-        url_hash = hashlib.md5(url.encode()).hexdigest()[:8]
-        if "sessionReplayId=" in url:
-            parts = url.split("sessionReplayId=")[1].split("&")[0].split("/")
-            session_replay_id = parts[0]
-            session_start_time = parts[1] if len(parts) > 1 else "unknown"
-            return f"{session_replay_id}_{session_start_time}_{url_hash}"
-        return f"no_session_id_{url_hash}"
-
+    
     def screenshot_by_title(self, page, block_title, session_id, base_dir):
         print(f"🔍 Ищем блок '{block_title}'...")
+        # Ваша оригинальная логика поиска, можно добавить больше селекторов для надежности
         el = page.query_selector(f'h4:has-text("{block_title}")')
         if not el:
-            print(f"❌ Блок '{block_title}' не найден!")
-            return None
+             print(f"❌ Блок '{block_title}' не найден!")
+             return None
         try:
             img_path = os.path.join(base_dir, f"{session_id}_{block_title.lower()}.png")
             el.screenshot(path=img_path)
@@ -272,13 +273,18 @@ class RenderScreenshotCollector:
         try:
             prefix = "FAILURE" if is_failure else "session_replay"
             archive_name = f"{prefix}_{session_id}_{int(time.time())}.zip"
-            archive_path = shutil.make_archive(os.path.join(tempfile.gettempdir(), archive_name.replace('.zip','')), 'zip', session_dir)
+            # Используем tempfile для создания временного пути для архива
+            temp_dir = tempfile.gettempdir()
+            archive_path_base = os.path.join(temp_dir, archive_name.replace('.zip',''))
+            archive_path = shutil.make_archive(archive_path_base, 'zip', session_dir)
+            
             print(f"📦 Создан архив: {archive_path}")
             uploaded_file = self.upload_to_google_drive(archive_path, os.path.basename(archive_path), self.gdrive_folder_id)
             if uploaded_file: print(f"☁️ Архив загружен в Google Drive")
             return uploaded_file
         finally:
-            shutil.rmtree(session_dir, ignore_errors=True)
+            if 'session_dir' in locals() and os.path.exists(session_dir):
+                shutil.rmtree(session_dir, ignore_errors=True)
             if 'archive_path' in locals() and os.path.exists(archive_path):
                 os.remove(archive_path)
 
@@ -313,8 +319,7 @@ class RenderScreenshotCollector:
                     summary_tab.click(force=True)
                 
                 print("    Данные для вкладки 'Summary' загружены. Ждем отрисовки.")
-                summary_el = page.locator('p.ltext-_uoww22').first
-                summary_el.wait_for(state='visible', timeout=45000)
+                page.locator('p.ltext-_uoww22').first.wait_for(state='visible', timeout=45000)
 
             except PlaywrightTimeoutError as e:
                 print(f"❌ Не удалось найти или загрузить контент 'Summary' для сессии {session_id}")
