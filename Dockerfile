@@ -1,5 +1,5 @@
 # Используем официальный образ от Microsoft
-FROM mcr.microsoft.com/playwright/python:v1.52.0-jammy
+FROM mcr.microsoft.com/playwright/python:v1.53.0-jammy
 
 # Устанавливаем переменные окружения для Tesseract
 ENV DEBIAN_FRONTEND=noninteractive
