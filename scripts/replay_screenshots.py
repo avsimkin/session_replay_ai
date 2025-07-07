@@ -40,10 +40,6 @@ USER_AGENTS = [
 ]
 
 def sanitize_cookies(cookies):
-    """
-    Проверяет и исправляет cookies, чтобы они соответствовали формату Playwright.
-    Учитывает регистр букв и отсутствие ключа.
-    """
     if not cookies:
         return []
     valid_same_site_values = {"Strict", "Lax", "None"}
@@ -58,7 +54,6 @@ def sanitize_cookies(cookies):
 
 
 def worker_process_url(collector_config: dict, url_data: dict, result_queue: multiprocessing.Queue):
-    """ Запускается в отдельном процессе. Создает свой экземпляр коллектора и Playwright. """
     try:
         collector = RenderScreenshotCollector(config_override=collector_config)
         sanitized_cookies = sanitize_cookies(collector.cookies)
@@ -188,15 +183,6 @@ class RenderScreenshotCollector:
         except Exception as e:
             print(f"[{datetime.now().strftime('%H:%M:%S')}] ❌ Ошибка обновления статуса URL {url}: {e}")
 
-    def get_session_id_from_url(self, url):
-        url_hash = hashlib.md5(url.encode()).hexdigest()[:8]
-        if "sessionReplayId=" in url:
-            parts = url.split("sessionReplayId=")[1].split("&")[0].split("/")
-            session_replay_id = parts[0]
-            session_start_time = parts[1] if len(parts) > 1 else "unknown"
-            return f"{session_replay_id}_{session_start_time}_{url_hash}"
-        return f"no_session_id_{url_hash}"
-        
     def login_and_update_cookies(self, page):
         print("⚠️ Обнаружена страница входа. Попытка автоматической авторизации...")
         login = os.environ.get('AMPLITUDE_LOGIN')
@@ -232,12 +218,21 @@ class RenderScreenshotCollector:
             except: pass
             return False
 
+    def get_session_id_from_url(self, url):
+        url_hash = hashlib.md5(url.encode()).hexdigest()[:8]
+        if "sessionReplayId=" in url:
+            parts = url.split("sessionReplayId=")[1].split("&")[0].split("/")
+            session_replay_id = parts[0]
+            session_start_time = parts[1] if len(parts) > 1 else "unknown"
+            return f"{session_replay_id}_{session_start_time}_{url_hash}"
+        return f"no_session_id_{url_hash}"
+
     def screenshot_by_title(self, page, block_title, session_id, base_dir):
         print(f"🔍 Ищем блок '{block_title}'...")
         el = page.query_selector(f'h4:has-text("{block_title}")')
         if not el:
-             print(f"❌ Блок '{block_title}' не найден!")
-             return None
+            print(f"❌ Блок '{block_title}' не найден!")
+            return None
         try:
             img_path = os.path.join(base_dir, f"{session_id}_{block_title.lower()}.png")
             el.screenshot(path=img_path)
@@ -255,7 +250,7 @@ class RenderScreenshotCollector:
         metadata = {
             "session_id": session_id, "url": url_data['url'], "amplitude_id": url_data['amplitude_id'],
             "session_replay_id": url_data['session_replay_id'], "duration_seconds": url_data['duration_seconds'],
-            "events_count": url_data['events_count'], "record_date": url_data['record_date'],
+            "events_count": url_data['events_count'], "record_date": url_data.get('record_date', ''),
             "processed_at": datetime.now().isoformat(),
             "screenshots": [os.path.basename(path) for path in screenshots if path]
         }
@@ -265,8 +260,9 @@ class RenderScreenshotCollector:
 
     def upload_to_google_drive(self, file_path, filename, folder_id):
         try:
+            file_metadata = {'name': filename, 'parents': [folder_id]}
             media = MediaFileUpload(file_path, resumable=True)
-            file = self.drive_service.files().create(body={'name': filename, 'parents': [folder_id]}, media_body=media, fields='id, name, webViewLink').execute()
+            file = self.drive_service.files().create(body=file_metadata, media_body=media, fields='id, name, webViewLink').execute()
             return file
         except Exception as e:
             print(f"❌ Ошибка загрузки в Google Drive: {e}")
@@ -286,7 +282,7 @@ class RenderScreenshotCollector:
             if 'archive_path' in locals() and os.path.exists(archive_path):
                 os.remove(archive_path)
 
-def process_single_url(self, page, url_data):
+    def process_single_url(self, page, url_data):
         url = url_data['url']
         session_id = self.get_session_id_from_url(url)
         temp_screenshots_dir = tempfile.mkdtemp(prefix=f"screenshots_{session_id}_")
@@ -295,14 +291,10 @@ def process_single_url(self, page, url_data):
         try:
             print(f"▶️ Обрабатываем сессию: {session_id}")
             
-            # --- ШАГ 1: НАДЕЖНАЯ ЗАГРУЗКА СТРАНИЦЫ ---
-            # Переходим на страницу и ждем, пока она не будет полностью "готова"
             page.goto(url, timeout=90000, wait_until='load')
-            # Дополнительная жесткая пауза, чтобы все скрипты на странице успели выполниться
             print("    Страница загружена, даем 10-15 секунд на полную прогрузку интерфейса...")
             time.sleep(random.uniform(10, 15))
 
-            # --- ШАГ 2: ПРОВЕРКА НА АВТОРИЗАЦИЮ ---
             if "/login" in page.url:
                 login_successful = self.login_and_update_cookies(page)
                 if not login_successful: return False, []
@@ -311,20 +303,16 @@ def process_single_url(self, page, url_data):
                 print("    Повторная пауза после логина...")
                 time.sleep(random.uniform(10, 15))
             
-            # --- ШАГ 3: УМНОЕ ОЖИДАНИЕ И ВЗАИМОДЕЙСТВИЕ ---
             try:
                 print("    Ищем вкладку 'Summary'...")
-                # Ждем именно кликабельности элемента
                 summary_tab = page.locator("text=Summary").first
                 summary_tab.wait_for(state='visible', timeout=45000)
                 
                 print("    Кликаем на 'Summary' и ждем ответа от сети...")
-                # Используем page.expect_response чтобы дождаться, пока данные для вкладки реально загрузятся
                 with page.expect_response(lambda response: "graphql" in response.url, timeout=45000):
                     summary_tab.click(force=True)
                 
                 print("    Данные для вкладки 'Summary' загружены. Ждем отрисовки.")
-                # Ждем появления контента после загрузки данных
                 summary_el = page.locator('p.ltext-_uoww22').first
                 summary_el.wait_for(state='visible', timeout=45000)
 
@@ -332,12 +320,7 @@ def process_single_url(self, page, url_data):
                 print(f"❌ Не удалось найти или загрузить контент 'Summary' для сессии {session_id}")
                 raise e
 
-            # --- ШАГ 4: ВАША ПРОВЕРЕННАЯ ЛОГИКА СОЗДАНИЯ СКРИНШОТОВ ---
             print("📸 Начинаем создание скриншотов...")
-            # ... (здесь остается ваш код для screenshot_by_title и т.д.) ...
-            # ... он теперь будет работать на 100% загруженной и готовой странице ...
-            
-            # Примерный вызов, замените на реальный
             summary_path = self.screenshot_by_title(page, "Summary", session_id, temp_screenshots_dir)
             sentiment_path = self.screenshot_by_title(page, "Sentiment", session_id, temp_screenshots_dir)
             
