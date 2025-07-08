@@ -37,6 +37,8 @@ PROCESS_TIMEOUT_PER_URL = 240
 USER_AGENTS = [
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15",
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:120.0) Gecko/20100101 Firefox/120.0"
 ]
 
 def sanitize_cookies(cookies):
@@ -51,7 +53,6 @@ def sanitize_cookies(cookies):
             cookie['sameSite'] = 'Lax'
         sanitized_cookies.append(cookie)
     return sanitized_cookies
-
 
 def worker_process_url(collector_config: dict, url_data: dict, result_queue: multiprocessing.Queue):
     try:
@@ -72,7 +73,12 @@ def worker_process_url(collector_config: dict, url_data: dict, result_queue: mul
                 user_agent=user_agent, viewport={'width': 1366, 'height': 768},
                 locale='en-US', timezone_id='America/New_York'
             )
-            context.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined});")
+            context.add_init_script("""
+                Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
+                window.navigator.chrome = { runtime: {} };
+                Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
+                Object.defineProperty(navigator, 'plugins', {get: () => [1, 2, 3, 4, 5]});
+            """)
             context.add_cookies(sanitized_cookies)
             page = context.new_page()
 
@@ -88,7 +94,6 @@ def worker_process_url(collector_config: dict, url_data: dict, result_queue: mul
         import traceback
         traceback.print_exc()
         result_queue.put(False)
-
 
 class RenderScreenshotCollector:
     def __init__(self, status_callback: Optional[Callable[[str, int], None]] = None, config_override: Optional[dict] = None):
@@ -226,13 +231,260 @@ class RenderScreenshotCollector:
                 print("    Скриншот ошибки авторизации сохранен в login_error_screenshot.png")
             except: pass
             return False
-    
-    def screenshot_by_title(self, page, block_title, session_id, base_dir):
-        print(f"🔍 Ищем блок '{block_title}'...")
-        el = page.query_selector(f'h4:has-text("{block_title}")')
+
+    def simulate_human_behavior(self, page):
+        """Имитация человеческого поведения для избежания детекции"""
+        try:
+            for _ in range(random.randint(2, 4)):
+                x = random.randint(200, 1200)
+                y = random.randint(200, 700)
+                page.mouse.move(x, y, steps=random.randint(5, 15))
+                time.sleep(random.uniform(0.1, 0.3))
+            if random.random() < 0.4:
+                scroll_amount = random.randint(100, 500)
+                direction = random.choice([1, -1])
+                page.evaluate(f"window.scrollBy(0, {scroll_amount * direction})")
+                time.sleep(random.uniform(0.5, 1.5))
+        except Exception:
+            pass
+
+    def wait_for_content(self, page, selector, bad_texts=("Loading", "Loading summary"), timeout=10, min_text_length=10):
+        """Улучшенное ожидание загрузки контента"""
+        print(f"⏳ Ждем загрузку контента (таймаут {timeout} сек)...")
+        start = time.time()
+        last_log = 0
+        while True:
+            el = page.query_selector(selector)
+            if el:
+                txt = el.inner_text().strip()
+                if txt and all(bad not in txt for bad in bad_texts) and len(txt) >= min_text_length:
+                    print(f"✅ Контент загружен за {time.time() - start:.1f} сек")
+                    return el
+            elapsed = time.time() - start
+            if elapsed - last_log >= 3:
+                print(f"⏳ Ожидание... {elapsed:.1f}/{timeout} сек")
+                last_log = elapsed
+            if elapsed > timeout:
+                print(f"⚠️ Контент не загрузился за {timeout} сек")
+                return None
+            time.sleep(0.5)
+
+    def screenshot_userinfo_block(self, page, session_id, base_dir):
+        """Скриншот блока с информацией о пользователе"""
+        os.makedirs(base_dir, exist_ok=True)
+        userinfo_div = None
+        try:
+            css_selector = '.cerulean-cardbase.cerulean-alpha-general-card'
+            elements = page.query_selector_all(css_selector)
+            for element in elements:
+                try:
+                    text = element.inner_text().strip()
+                    bbox = element.bounding_box()
+                    if (bbox and
+                            bbox['y'] < 400 and
+                            text and
+                            len(text) > 10 and len(text) < 500 and
+                            (any(char.isdigit() for char in text) or
+                             any(country in text for country in
+                                 ["Spain", "Peru", "Bolivia", "Ecuador", "Netherlands", "Costa Rica", "Russia"]))):
+                        userinfo_div = element
+                        break
+                except Exception:
+                    continue
+        except Exception:
+            pass
+
+        if not userinfo_div:
+            try:
+                session_selectors = [
+                    'text=Session Length',
+                    'text=Event Total',
+                    'text=Device Type'
+                ]
+                for selector in session_selectors:
+                    element = page.query_selector(selector)
+                    if element:
+                        parent = element
+                        for _ in range(5):
+                            try:
+                                parent = parent.evaluate_handle('el => el.parentElement').as_element()
+                                if parent:
+                                    bbox = parent.bounding_box()
+                                    text = parent.inner_text().strip()
+                                    if (bbox and bbox['y'] < 400 and
+                                            bbox['width'] > 200 and bbox['height'] > 80 and
+                                            len(text) > 20 and len(text) < 500):
+                                        userinfo_div = parent
+                                        break
+                            except Exception:
+                                break
+                        if userinfo_div:
+                            break
+            except Exception:
+                pass
+
+        if not userinfo_div:
+            print("⚠️ User info не найден")
+            return None
+
+        try:
+            img_path = os.path.join(base_dir, f"{session_id}_userinfo.png")
+            userinfo_div.screenshot(path=img_path)
+            print("✅ User info сохранён")
+            return img_path
+        except Exception:
+            print("❌ Ошибка создания скриншота user info")
+            return None
+
+    def screenshot_summary_flexible(self, page, session_id, base_dir, summary_el=None):
+        """Гибкий скриншот блока Summary с fallback стратегиями"""
+        os.makedirs(base_dir, exist_ok=True)
+        print("📄 Ищем Summary блок...")
+
+        el = summary_el
         if not el:
-             print(f"❌ Блок '{block_title}' не найден!")
-             return None
+            el = self.wait_for_content(page, 'p.ltext-_uoww22', timeout=3)
+
+        if el:
+            text_content = el.inner_text().strip()
+            if len(text_content) > 20:
+                print(f"✅ Summary загружен (длина: {len(text_content)} символов)")
+            else:
+                print(f"⚠️ Summary слишком короткий ({len(text_content)} символов), пробуем fallback")
+                el = None
+
+        if not el:
+            print("⚠️ Пробуем fallback селекторы для Summary...")
+            fallback_selectors = [
+                'div[style*="min-width: 460px"]',
+                '.ltext-_uoww22',
+                'div:has-text("Summary")',
+                'p:has-text("The user")',
+                'p:has-text("session")',
+                '[data-testid*="summary"]',
+                'div[class*="summary"] p'
+            ]
+            for selector in fallback_selectors:
+                try:
+                    el = page.query_selector(selector)
+                    if el:
+                        text = el.inner_text().strip()
+                        if text and len(text) > 20 and "Loading" not in text:
+                            print(f"✅ Fallback сработал с селектором: {selector}")
+                            break
+                        else:
+                            el = None
+                except Exception:
+                    continue
+
+            if not el:
+                print("❌ Не удалось найти Summary блок ни одним способом")
+                return []
+
+        try:
+            img_name = os.path.join(base_dir, f"{session_id}_summary.png")
+            el.screenshot(path=img_name)
+            print("✅ Summary скриншот сохранён")
+            return [img_name]
+        except Exception as e:
+            print(f"❌ Ошибка создания скриншота Summary: {e}")
+            return []
+
+    def screenshot_by_title(self, page, block_title, session_id, base_dir):
+        """Универсальный скриншот блока по заголовку"""
+        os.makedirs(base_dir, exist_ok=True)
+        print(f"🔍 Ищем блок '{block_title}'...")
+        el = None
+        
+        search_selectors = [
+            f'h4:has-text("{block_title}")',
+            f'h3:has-text("{block_title}")',
+            f'h2:has-text("{block_title}")',
+            f'div:has-text("{block_title}")',
+            f'span:has-text("{block_title}")',
+            f'h5:has-text("{block_title}")',
+            f'[title="{block_title}"]',
+            f'[aria-label="{block_title}"]',
+            f'[data-testid*="{block_title.lower()}"]'
+        ]
+        
+        for selector in search_selectors:
+            try:
+                maybe = page.query_selector(selector)
+                if maybe:
+                    print(f"📍 Найден элемент с '{block_title}' через селектор: {selector}")
+                    parent = maybe
+                    for level in range(6):
+                        try:
+                            bbox = parent.bounding_box()
+                            if bbox and bbox['height'] > 60 and bbox['width'] > 200:
+                                text_content = parent.inner_text().strip()
+                                if text_content and len(text_content) > 10:
+                                    el = parent
+                                    print(f"✅ Найден подходящий контейнер на уровне {level}")
+                                    break
+                        except Exception:
+                            pass
+                        try:
+                            parent = parent.evaluate_handle('el => el.parentElement').as_element()
+                            if not parent:
+                                break
+                        except Exception:
+                            break
+                    if el:
+                        break
+            except Exception:
+                continue
+
+        if not el:
+            print(f"🔄 Пробуем поиск по частичному содержимому '{block_title}'...")
+            try:
+                all_elements = page.query_selector_all('div, span, h1, h2, h3, h4, h5, h6')
+                for element in all_elements:
+                    try:
+                        text = element.inner_text().strip()
+                        if block_title.lower() in text.lower() and len(text) < 100:
+                            parent = element
+                            for _ in range(4):
+                                try:
+                                    parent = parent.evaluate_handle('el => el.parentElement').as_element()
+                                    if parent:
+                                        bbox = parent.bounding_box()
+                                        parent_text = parent.inner_text().strip()
+                                        if (bbox and bbox['height'] > 60 and
+                                                len(parent_text) > len(text) and len(parent_text) < 1000):
+                                            el = parent
+                                            print(f"✅ Найден через поиск по содержимому")
+                                            break
+                                except Exception:
+                                    break
+                            if el:
+                                break
+                    except Exception:
+                        continue
+            except Exception:
+                pass
+
+        if el:
+            content_loaded = False
+            print(f"⏳ Ждем загрузку контента блока '{block_title}'...")
+            for attempt in range(30):
+                try:
+                    txt = el.inner_text().strip()
+                    if txt and "Loading" not in txt and len(txt) > 10:
+                        content_loaded = True
+                        print(f"✅ Контент блока '{block_title}' загружен")
+                        break
+                except Exception:
+                    pass
+                time.sleep(0.5)
+
+            if not content_loaded:
+                print(f"⚠️ {block_title} — Не дождались полной загрузки, скриню как есть")
+        else:
+            print(f"❌ Блок '{block_title}' не найден!")
+            return None
+
         try:
             img_path = os.path.join(base_dir, f"{session_id}_{block_title.lower()}.png")
             el.screenshot(path=img_path)
@@ -289,76 +541,142 @@ class RenderScreenshotCollector:
         url = url_data['url']
         session_id = self.get_session_id_from_url(url)
         temp_screenshots_dir = tempfile.mkdtemp(prefix=f"screenshots_{session_id}_")
-        REQUIRED_BLOCKS = ['summary', 'sentiment']
+        REQUIRED_BLOCKS = ['userinfo', 'summary', 'sentiment']
         screenshot_paths = []
+        
         try:
             print(f"▶️ Обрабатываем сессию: {session_id}")
             
-            page.goto(url, timeout=90000, wait_until='load')
-            print("    Страница загружена, даем 10-15 секунд на полную прогрузку интерфейса...")
-            time.sleep(random.uniform(10, 15))
+            # Имитация человеческого поведения
+            self.simulate_human_behavior(page)
+            
+            # Загружаем страницу с увеличенным таймаутом
+            page.goto(url, timeout=60000, wait_until='domcontentloaded')
+            time.sleep(random.uniform(2, 5))
 
             if "/login" in page.url:
                 login_successful = self.login_and_update_cookies(page)
                 if not login_successful: return False, []
                 print(f"    Возвращаемся к исходной ссылке...")
-                page.goto(url, timeout=90000, wait_until='load')
-                print("    Повторная пауза после логина...")
-                time.sleep(random.uniform(10, 15))
-            
-            try:
-                print("    Ищем вкладку 'Summary'...")
-                summary_tab = page.locator("text=Summary").first
-                summary_tab.wait_for(state='visible', timeout=45000)
-                
-                print("    Кликаем на 'Summary' и ждем ответа от сети...")
-                with page.expect_response(lambda response: "graphql" in response.url, timeout=45000):
-                    summary_tab.click(force=True)
-                
-                print("    Данные для вкладки 'Summary' загружены. Ждем отрисовки.")
-                summary_el = None
-                for attempt in range(3):
-                    print(f"      Попытка {attempt + 1} найти контент...")
+                page.goto(url, timeout=60000, wait_until='domcontentloaded')
+                time.sleep(random.uniform(2, 5))
+
+            # Ищем и кликаем на Summary с более надежной стратегией
+            summary_tab = page.query_selector("text=Summary")
+            if summary_tab:
+                try:
+                    self.simulate_human_behavior(page)
+                    summary_tab.click()
+                    print("🖱️ Кликнули на Summary")
+                    time.sleep(random.uniform(3, 6))
+                    summary_el = self.wait_for_content(page, 'p.ltext-_uoww22', timeout=20)
+                except PlaywrightError as e:
+                    print(f"⚠️ Ошибка клика на Summary: {e}")
+                    # Пробуем альтернативные способы
                     try:
-                        el = page.locator('p.ltext-_uoww22').first
-                        el.wait_for(state='visible', timeout=15000)
-                        summary_el = el
-                        print("      ✅ Контент найден!")
-                        break
-                    except PlaywrightTimeoutError:
-                        print(f"      ⚠️ Попытка {attempt + 1} не удалась, ждем 5 секунд...")
-                        time.sleep(5)
-                
-                if not summary_el:
-                    raise PlaywrightTimeoutError("Контент вкладки 'Summary' так и не появился после всех попыток.")
+                        summary_tab = page.wait_for_selector("text=Summary", timeout=5000)
+                        summary_tab.click(force=True)
+                        print("🖱️ Кликнули на Summary (force)")
+                        time.sleep(random.uniform(3, 6))
+                        summary_el = self.wait_for_content(page, 'p.ltext-_uoww22', timeout=20)
+                    except Exception as e2:
+                        print(f"❌ Не удалось кликнуть на Summary: {e2}")
+                        return False, []
+            else:
+                print("❌ Вкладка Summary не найдена!")
+                return False, []
 
-            except PlaywrightTimeoutError as e:
-                print(f"❌ Не удалось найти или загрузить контент 'Summary' для сессии {session_id}")
-                raise e
+            screenshot_results = {}
+            print("\n📸 Начинаем создание скриншотов...")
 
-            print("📸 Начинаем создание скриншотов...")
-            summary_path = self.screenshot_by_title(page, "Summary", session_id, temp_screenshots_dir)
+            # 1. User Info блок
+            print("\n1️⃣ User Info блок:")
+            userinfo_path = self.screenshot_userinfo_block(page, session_id, temp_screenshots_dir)
+            screenshot_results['userinfo'] = userinfo_path is not None
+            if userinfo_path:
+                screenshot_paths.append(userinfo_path)
+            time.sleep(random.uniform(1, 2))
+
+            # 2. Summary блок
+            print("\n2️⃣ Summary блок:")
+            summary_paths = self.screenshot_summary_flexible(page, session_id, temp_screenshots_dir, summary_el=summary_el)
+            screenshot_results['summary'] = len(summary_paths) > 0
+            if summary_paths:
+                screenshot_paths.extend(summary_paths)
+            time.sleep(random.uniform(1, 2))
+
+            # 3. Sentiment блок
+            print("\n3️⃣ Sentiment блок:")
             sentiment_path = self.screenshot_by_title(page, "Sentiment", session_id, temp_screenshots_dir)
-            
-            if not all([summary_path, sentiment_path]):
-                print(f"❌ Не собраны все обязательные блоки для {session_id}")
-                return False, [p for p in [summary_path, sentiment_path] if p]
-            
-            screenshot_paths = [summary_path, sentiment_path]
+            screenshot_results['sentiment'] = sentiment_path is not None
+            if sentiment_path:
+                screenshot_paths.append(sentiment_path)
+            time.sleep(random.uniform(1, 2))
+
+            # 4. Actions блок (дополнительный)
+            print("\n4️⃣ Actions блок:")
+            actions_path = self.screenshot_by_title(page, "Actions", session_id, temp_screenshots_dir)
+            screenshot_results['actions'] = actions_path is not None
+            if actions_path:
+                screenshot_paths.append(actions_path)
+
+            print(f"\n📊 Результаты скриншотов:")
+            for block, success in screenshot_results.items():
+                status = "✅" if success else "❌"
+                print(f"   {status} {block.capitalize()}")
+
+            # Проверяем наличие всех обязательных блоков
+            all_required_success = all(screenshot_results.get(block, False) for block in REQUIRED_BLOCKS)
+            total_blocks = len([path for path in screenshot_paths if path and os.path.exists(path)])
+
+            print(f"\n🎯 Анализ качества:")
+            print(f"   📋 Все обязательные блоки: {'✅' if all_required_success else '❌'}")
+            print(f"   📸 Всего скриншотов: {total_blocks}")
+
+            # В Render режиме принимаем даже частичные результаты
+            if total_blocks < 2:
+                print(f"❌ Получено меньше 2 скриншотов ({total_blocks}). Результат не будет загружен.")
+                return False, screenshot_paths
+
+            # Создаем и загружаем архив
             session_dir = self.create_session_folder_structure(session_id, screenshot_paths, url_data)
             uploaded_file = self.create_and_upload_session_archive(session_dir, session_id)
-            return bool(uploaded_file), screenshot_paths
-        
+
+            if uploaded_file:
+                # Очищаем временные файлы
+                for path in screenshot_paths:
+                    if path and os.path.exists(path):
+                        os.remove(path)
+                return True, screenshot_paths
+            else:
+                print("❌ Не удалось загрузить архив в Google Drive")
+                return False, screenshot_paths
+
         except Exception as e:
-            print(f"❌ Ошибка обработки URL {url}: {e}")
+            print(f"❌ Ошибка при обработке URL {url}: {e}")
+            import traceback
+            traceback.print_exc()
+            
+            # Создаем failure архив
             failure_path = os.path.join(temp_screenshots_dir, f"FAILURE_screenshot.png")
             try:
                 page.screenshot(path=failure_path, full_page=True, timeout=15000)
                 print(f"    Скриншот ошибки сохранен.")
+                screenshot_paths.append(failure_path)
             except Exception as e_scr:
                 print(f"    Не удалось сделать скриншот ошибки: {e_scr}")
+            
+            # Сохраняем HTML для диагностики
+            try:
+                html_path = os.path.join(temp_screenshots_dir, f"FAILURE_page_content.html")
+                with open(html_path, 'w', encoding='utf-8') as f:
+                    f.write(page.content())
+                print(f"    HTML контент сохранен для диагностики.")
+            except Exception as e_html:
+                print(f"    Не удалось сохранить HTML: {e_html}")
+            
             self.create_and_upload_session_archive(temp_screenshots_dir, session_id, is_failure=True)
-            return False, []
+            return False, screenshot_paths
         finally:
             if 'temp_screenshots_dir' in locals() and os.path.exists(temp_screenshots_dir):
                 shutil.rmtree(temp_screenshots_dir, ignore_errors=True)
@@ -375,30 +693,42 @@ class RenderScreenshotCollector:
             "cookies_path": self.cookies_path 
         }
         safety_settings = self.get_safety_settings()
+        
         for i, url_data in enumerate(urls_batch, 1):
             self._update_status(f"▶️ [{i}/{len(urls_batch)}] Запускаем процесс для URL ...{url_data['url'][-40:]}", -1)
             process = multiprocessing.Process(target=worker_process_url, args=(collector_config, url_data, result_queue))
             process.start()
             process.join(timeout=PROCESS_TIMEOUT_PER_URL)
+            
             if process.is_alive():
                 try:
                     self._update_status(f"❗ ТАЙМАУТ! Процесс для URL ...{url_data['url'][-40:]} завис. Завершаем.", -1)
-                    process.terminate(); process.join(timeout=5)
-                    if process.is_alive(): process.kill(); process.join(timeout=5)
-                    batch_timeouts += 1; batch_failed += 1
+                    process.terminate()
+                    process.join(timeout=5)
+                    if process.is_alive(): 
+                        process.kill()
+                        process.join(timeout=5)
+                    batch_timeouts += 1
+                    batch_failed += 1
                     self.mark_url_as_processed(url_data['url'], success=False)
                 except Exception as e:
                     self._update_status(f"❌ ОШИБКА во время обработки таймаута! {e}", -1)
-                    batch_failed += 1; batch_timeouts += 1
+                    batch_failed += 1
+                    batch_timeouts += 1
             else:
                 try:
                     success = result_queue.get_nowait()
-                    if success: batch_successful += 1
-                    else: batch_failed += 1
+                    if success: 
+                        batch_successful += 1
+                    else: 
+                        batch_failed += 1
                 except queue.Empty:
-                    batch_failed += 1; self.mark_url_as_processed(url_data['url'], success=False)
+                    batch_failed += 1
+                    self.mark_url_as_processed(url_data['url'], success=False)
+            
             if i < len(urls_batch):
                 time.sleep(random.uniform(safety_settings['min_delay'], safety_settings['max_delay']))
+        
         self.total_processed += len(urls_batch)
         self.total_successful += batch_successful
         self.total_failed += batch_failed
@@ -438,8 +768,10 @@ class RenderScreenshotCollector:
 
     def get_safety_settings(self):
         safety_mode = os.environ.get('SAFETY_MODE', 'normal').lower()
-        if safety_mode == 'slow': return {'min_delay': 3, 'max_delay': 8, 'name': 'МЕДЛЕННЫЙ'}
-        if safety_mode == 'fast': return {'min_delay': 1, 'max_delay': 3, 'name': 'БЫСТРЫЙ'}
+        if safety_mode == 'slow': 
+            return {'min_delay': 3, 'max_delay': 8, 'name': 'МЕДЛЕННЫЙ'}
+        if safety_mode == 'fast': 
+            return {'min_delay': 1, 'max_delay': 3, 'name': 'БЫСТРЫЙ'}
         return {'min_delay': 2, 'max_delay': 5, 'name': 'ОБЫЧНЫЙ'}
         
     def print_overall_stats(self):
