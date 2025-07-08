@@ -229,7 +229,6 @@ class RenderScreenshotCollector:
     
     def screenshot_by_title(self, page, block_title, session_id, base_dir):
         print(f"🔍 Ищем блок '{block_title}'...")
-        # Ваша оригинальная логика поиска, можно добавить больше селекторов для надежности
         el = page.query_selector(f'h4:has-text("{block_title}")')
         if not el:
              print(f"❌ Блок '{block_title}' не найден!")
@@ -273,9 +272,7 @@ class RenderScreenshotCollector:
         try:
             prefix = "FAILURE" if is_failure else "session_replay"
             archive_name = f"{prefix}_{session_id}_{int(time.time())}.zip"
-            # Используем tempfile для создания временного пути для архива
-            temp_dir = tempfile.gettempdir()
-            archive_path_base = os.path.join(temp_dir, archive_name.replace('.zip',''))
+            archive_path_base = os.path.join(tempfile.gettempdir(), archive_name.replace('.zip',''))
             archive_path = shutil.make_archive(archive_path_base, 'zip', session_dir)
             
             print(f"📦 Создан архив: {archive_path}")
@@ -319,7 +316,21 @@ class RenderScreenshotCollector:
                     summary_tab.click(force=True)
                 
                 print("    Данные для вкладки 'Summary' загружены. Ждем отрисовки.")
-                page.locator('p.ltext-_uoww22').first.wait_for(state='visible', timeout=45000)
+                summary_el = None
+                for attempt in range(3):
+                    print(f"      Попытка {attempt + 1} найти контент...")
+                    try:
+                        el = page.locator('p.ltext-_uoww22').first
+                        el.wait_for(state='visible', timeout=15000)
+                        summary_el = el
+                        print("      ✅ Контент найден!")
+                        break
+                    except PlaywrightTimeoutError:
+                        print(f"      ⚠️ Попытка {attempt + 1} не удалась, ждем 5 секунд...")
+                        time.sleep(5)
+                
+                if not summary_el:
+                    raise PlaywrightTimeoutError("Контент вкладки 'Summary' так и не появился после всех попыток.")
 
             except PlaywrightTimeoutError as e:
                 print(f"❌ Не удалось найти или загрузить контент 'Summary' для сессии {session_id}")
@@ -351,7 +362,7 @@ class RenderScreenshotCollector:
         finally:
             if 'temp_screenshots_dir' in locals() and os.path.exists(temp_screenshots_dir):
                 shutil.rmtree(temp_screenshots_dir, ignore_errors=True)
-
+    
     def process_batch(self, urls_batch):
         batch_start_time = time.time()
         batch_successful, batch_failed, batch_timeouts = 0, 0, 0
