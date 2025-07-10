@@ -12,12 +12,15 @@ from typing import Callable, Optional
 import zipfile
 import multiprocessing
 import queue
+import io
 
-# Импорты для работы с Google API
-from google.oauth2 import service_account
+# Импорты для работы с Google API - ИЗМЕНЕНИЯ ДЛЯ OAUTH
+from google.oauth2.credentials import Credentials
+from google.auth.transport.requests import Request
 from googleapiclient.discovery import build
-from googleapiclient.http import MediaFileUpload
+from googleapiclient.http import MediaIoBaseUpload  # Изменено на MediaIoBaseUpload
 from google.cloud import bigquery
+from google.oauth2 import service_account  # Оставляем только для BigQuery
 
 # Добавляем путь к корню проекта для импорта config
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -40,6 +43,104 @@ USER_AGENTS = [
     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36",
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:120.0) Gecko/20100101 Firefox/120.0"
 ]
+
+# НОВЫЙ КЛАСС ДЛЯ OAUTH DRIVE
+class DriveOAuthClient:
+    """Клиент для работы с Google Drive через OAuth"""
+    
+    def __init__(self):
+        self.service = None
+        self.scopes = ['https://www.googleapis.com/auth/drive.file']
+        
+    def authenticate(self):
+        """Авторизация через сохраненные токены"""
+        try:
+            # Получаем токены из переменных окружения
+            refresh_token = os.environ.get('GOOGLE_REFRESH_TOKEN')
+            client_id = os.environ.get('GOOGLE_CLIENT_ID')
+            client_secret = os.environ.get('GOOGLE_CLIENT_SECRET')
+            
+            if not all([refresh_token, client_id, client_secret]):
+                raise ValueError("Не все переменные окружения настроены")
+            
+            # Создаем credentials
+            creds = Credentials(
+                token=None,
+                refresh_token=refresh_token,
+                token_uri='https://oauth2.googleapis.com/token',
+                client_id=client_id,
+                client_secret=client_secret,
+                scopes=self.scopes
+            )
+            
+            # Обновляем токен
+            creds.refresh(Request())
+            
+            # Создаем сервис
+            self.service = build('drive', 'v3', credentials=creds)
+            print("✅ OAuth авторизация в Google Drive успешна")
+            
+            return True
+            
+        except Exception as e:
+            print(f"❌ Ошибка OAuth авторизации: {e}")
+            return False
+    
+    def upload_file(self, file_path, file_name=None, folder_id=None):
+        """
+        Загрузить файл в Google Drive
+        
+        Args:
+            file_path (str): Путь к файлу
+            file_name (str): Имя файла в Drive (опционально)
+            folder_id (str): ID папки для загрузки (опционально)
+        
+        Returns:
+            dict: Информация о загруженном файле
+        """
+        try:
+            if not self.service:
+                if not self.authenticate():
+                    return None
+            
+            # Определяем имя файла
+            if not file_name:
+                file_name = os.path.basename(file_path)
+            
+            # Метаданные файла
+            file_metadata = {'name': file_name}
+            
+            # Если указана папка, добавляем её
+            if folder_id:
+                file_metadata['parents'] = [folder_id]
+            
+            # Читаем файл
+            with open(file_path, 'rb') as file_data:
+                media = MediaIoBaseUpload(
+                    io.BytesIO(file_data.read()),
+                    mimetype='application/octet-stream',
+                    resumable=True
+                )
+            
+            # Загружаем файл
+            file = self.service.files().create(
+                body=file_metadata,
+                media_body=media,
+                fields='id,name,webViewLink'
+            ).execute()
+            
+            print(f"✅ Файл загружен: {file.get('name')}")
+            print(f"🔗 Ссылка: {file.get('webViewLink')}")
+            
+            return {
+                'id': file.get('id'),
+                'name': file.get('name'),
+                'webViewLink': file.get('webViewLink')
+            }
+            
+        except Exception as e:
+            print(f"❌ Ошибка загрузки файла: {e}")
+            return None
 
 def sanitize_cookies(cookies):
     if not cookies:
@@ -126,7 +227,7 @@ class RenderScreenshotCollector:
         
         self.full_table_name = f"`{self.bq_project_id}.{self.bq_dataset_id}.{self.bq_table_id}`"
         self._init_bigquery()
-        self._init_google_drive()
+        self._init_google_drive_oauth()  # ИЗМЕНЕНО НА OAUTH
 
     def _update_status(self, details: str, progress: int):
         if self.status_callback: self.status_callback(details, progress)
@@ -147,6 +248,7 @@ class RenderScreenshotCollector:
             return []
 
     def _init_bigquery(self):
+        # BigQuery пока остается на Service Account
         try:
             credentials = service_account.Credentials.from_service_account_file(
                 self.credentials_path, scopes=["https://www.googleapis.com/auth/bigquery"])
@@ -154,11 +256,12 @@ class RenderScreenshotCollector:
         except Exception as e:
             raise Exception(f"❌ Ошибка подключения к BigQuery: {e}")
 
-    def _init_google_drive(self):
+    def _init_google_drive_oauth(self):
+        """НОВЫЙ МЕТОД - инициализация Google Drive через OAuth"""
         try:
-            credentials = service_account.Credentials.from_service_account_file(
-                self.credentials_path, scopes=['https://www.googleapis.com/auth/drive'])
-            self.drive_service = build('drive', 'v3', credentials=credentials)
+            self.drive_client = DriveOAuthClient()
+            if not self.drive_client.authenticate():
+                raise Exception("Не удалось авторизоваться в Google Drive")
         except Exception as e:
             raise Exception(f"❌ Ошибка подключения к Google Drive: {e}")
 
@@ -511,11 +614,9 @@ class RenderScreenshotCollector:
         return session_dir
 
     def upload_to_google_drive(self, file_path, filename, folder_id):
+        """ИЗМЕНЕНО - используем OAuth клиент вместо service account"""
         try:
-            file_metadata = {'name': filename, 'parents': [folder_id]}
-            media = MediaFileUpload(file_path, resumable=True)
-            file = self.drive_service.files().create(body=file_metadata, media_body=media, fields='id, name, webViewLink',supportsAllDrives=True).execute()
-            return file
+            return self.drive_client.upload_file(file_path, filename, folder_id)
         except Exception as e:
             print(f"❌ Ошибка загрузки в Google Drive: {e}")
             return None
@@ -527,10 +628,15 @@ class RenderScreenshotCollector:
             archive_path_base = os.path.join(tempfile.gettempdir(), archive_name.replace('.zip',''))
             archive_path = shutil.make_archive(archive_path_base, 'zip', session_dir)
             
-            print(f"📦 Создан архив: {archive_path}")
-            uploaded_file = self.upload_to_google_drive(archive_path, os.path.basename(archive_path), self.gdrive_folder_id)
-            if uploaded_file: print(f"☁️ Архив загружен в Google Drive")
+            print(f"📦 Создан архив: {archive_name}")
+            uploaded_file = self.upload_to_google_drive(archive_path, archive_name, self.gdrive_folder_id)
+            if uploaded_file: 
+                print(f"☁️ Архив загружен в Google Drive")
+                print(f"🔗 Ссылка: {uploaded_file.get('webViewLink', 'N/A')}")
             return uploaded_file
+        except Exception as e:
+            print(f"❌ Ошибка создания/загрузки архива: {e}")
+            return None
         finally:
             if 'session_dir' in locals() and os.path.exists(session_dir):
                 shutil.rmtree(session_dir, ignore_errors=True)
@@ -649,7 +755,7 @@ class RenderScreenshotCollector:
                         os.remove(path)
                 return True, screenshot_paths
             else:
-                print("❌ Не удалось загрузить архив в Google Drive")
+                print("❌ Не удалось загрузить архив")
                 return False, screenshot_paths
 
         except Exception as e:
