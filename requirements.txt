@@ -45,3 +45,5 @@ nltk>=3.8.0
 
 db-dtypes
 pandas-gbq
+
+psutil>=5.9.0
