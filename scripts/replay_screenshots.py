@@ -514,7 +514,7 @@ class RenderScreenshotCollector:
         try:
             file_metadata = {'name': filename, 'parents': [folder_id]}
             media = MediaFileUpload(file_path, resumable=True)
-            file = self.drive_service.files().create(body=file_metadata, media_body=media, fields='id, name, webViewLink').execute()
+            file = self.drive_service.files().create(body=file_metadata, media_body=media, fields='id, name, webViewLink',supportsAllDrives=True).execute()
             return file
         except Exception as e:
             print(f"❌ Ошибка загрузки в Google Drive: {e}")
