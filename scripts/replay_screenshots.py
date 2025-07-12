@@ -311,7 +311,7 @@ class RenderScreenshotCollector:
         WHERE is_processed = FALSE
         AND duration_seconds >= {self.min_duration_seconds}
         AND duration_seconds <= {self.max_duration_seconds}
-        ORDER BY record_date
+        ORDER BY record_date DESC
         """
         if limit:
             query += f"\nLIMIT {limit}"
