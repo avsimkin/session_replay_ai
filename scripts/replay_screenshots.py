@@ -524,6 +524,126 @@ class RenderScreenshotCollector:
         except Exception:
             pass
 
+    def hide_popups_and_overlays(self, page):
+        """Скрытие всплывающих элементов и опросов перед скриншотами"""
+        try:
+            print("🙈 Скрываем всплывающие элементы...")
+            page.evaluate("""
+                () => {
+                    // Селекторы для различных типов всплывающих элементов
+                    const popupSelectors = [
+                        // Опросы и модальные окна
+                        '[data-testid*="survey"]',
+                        '[data-testid*="modal"]',
+                        '[data-testid*="popup"]',
+                        '[data-testid*="feedback"]',
+                        '[class*="survey"]',
+                        '[class*="modal"]',
+                        '[class*="popup"]',
+                        '[class*="overlay"]',
+                        '[class*="dialog"]',
+                        '[class*="feedback"]',
+                        '[class*="toast"]',
+                        '[class*="notification"]',
+                        '[id*="survey"]',
+                        '[id*="modal"]',
+                        '[id*="popup"]',
+                        '[id*="feedback"]',
+                        
+                        // Специфичные для Amplitude
+                        '[class*="amplitude-survey"]',
+                        '[class*="amplitude-feedback"]',
+                        '[class*="amplitude-modal"]',
+                        
+                        // Общие всплывающие элементы
+                        '.ReactModal__Overlay',
+                        '.modal-overlay',
+                        '.popup-overlay',
+                        '.dialog-overlay',
+                        
+                        // Элементы с высоким z-index (обычно всплывающие)
+                        '*[style*="z-index: 9"]',
+                        '*[style*="position: fixed"]',
+                        '*[style*="position: absolute"][style*="top: 0"]'
+                    ];
+                    
+                    let hiddenCount = 0;
+                    
+                    // Скрываем все найденные элементы
+                    popupSelectors.forEach(selector => {
+                        try {
+                            const elements = document.querySelectorAll(selector);
+                            elements.forEach(element => {
+                                // Проверяем, что элемент видимый и потенциально всплывающий
+                                const computedStyle = window.getComputedStyle(element);
+                                const isVisible = computedStyle.display !== 'none' && 
+                                                computedStyle.visibility !== 'hidden' &&
+                                                computedStyle.opacity !== '0';
+                                
+                                if (isVisible) {
+                                    // Проверяем размер - скрываем только небольшие элементы (вероятно опросы)
+                                    const rect = element.getBoundingClientRect();
+                                    if (rect.width < window.innerWidth * 0.8 && rect.height < window.innerHeight * 0.8) {
+                                        element.style.display = 'none';
+                                        hiddenCount++;
+                                    }
+                                }
+                            });
+                        } catch (e) {
+                            // Игнорируем ошибки с отдельными селекторами
+                        }
+                    });
+                    
+                    // Дополнительно: ищем элементы с текстом, похожим на опросы
+                    const allElements = document.querySelectorAll('*');
+                    allElements.forEach(element => {
+                        try {
+                            const text = element.innerText || element.textContent || '';
+                            const isSmallElement = element.getBoundingClientRect().width < 500 && 
+                                                 element.getBoundingClientRect().height < 400;
+                            
+                            if (isSmallElement && (
+                                text.includes('What could be improved') ||
+                                text.includes('Select any options') ||
+                                text.includes('Continue') ||
+                                text.includes('Loading speed') ||
+                                text.includes('Quality of replay') ||
+                                text.includes('Missing or inconsistent data') ||
+                                text.includes('Sync with event stream') ||
+                                text.includes('experience with this replay')
+                            )) {
+                                // Скрываем родительский контейнер
+                                let parent = element;
+                                for (let i = 0; i < 5; i++) {
+                                    parent = parent.parentElement;
+                                    if (!parent) break;
+                                    
+                                    const parentRect = parent.getBoundingClientRect();
+                                    if (parentRect.width < 600 && parentRect.height < 500) {
+                                        parent.style.display = 'none';
+                                        hiddenCount++;
+                                        break;
+                                    }
+                                }
+                            }
+                        } catch (e) {
+                            // Игнорируем ошибки
+                        }
+                    });
+                    
+                    console.log(`Скрыто ${hiddenCount} всплывающих элементов`);
+                    return hiddenCount;
+                }
+            """)
+            
+            # Даем время на применение изменений
+            time.sleep(1)
+            print("✅ Всплывающие элементы скрыты")
+            
+        except Exception as e:
+            print(f"⚠️ Ошибка при скрытии всплывающих элементов: {e}")
+            # Продолжаем работу даже если скрытие не сработало
+
     def screenshot_summary_flexible(self, page, session_id, base_dir="screens", summary_el=None):
         """ОПТИМИЗИРОВАНО: Экономичный скриншот Summary блока"""
         # Используем временную директорию процесса
@@ -531,6 +651,9 @@ class RenderScreenshotCollector:
             base_dir = self.temp_dir
         os.makedirs(base_dir, exist_ok=True)
         print("📄 Ищем Summary блок...")
+
+        # СКРЫВАЕМ ВСПЛЫВАЮЩИЕ ЭЛЕМЕНТЫ ПЕРЕД СКРИНШОТОМ
+        self.hide_popups_and_overlays(page)
 
         el = summary_el
         if not el:
@@ -600,6 +723,10 @@ class RenderScreenshotCollector:
             return []
 
         try:
+            # Еще раз скрываем всплывающие элементы прямо перед скриншотом
+            self.hide_popups_and_overlays(page)
+            time.sleep(1)  # Даем время на применение
+            
             img_name = os.path.join(base_dir, f"{session_id}_summary.png")
             el.screenshot(path=img_name)
             
@@ -619,6 +746,10 @@ class RenderScreenshotCollector:
             base_dir = self.temp_dir
         os.makedirs(base_dir, exist_ok=True)
         print(f"🔍 Ищем блок '{block_title}'...")
+        
+        # СКРЫВАЕМ ВСПЛЫВАЮЩИЕ ЭЛЕМЕНТЫ ПЕРЕД ПОИСКОМ
+        self.hide_popups_and_overlays(page)
+        
         el = None
         
         search_selectors = [
@@ -670,6 +801,10 @@ class RenderScreenshotCollector:
             return None
 
         try:
+            # Еще раз скрываем всплывающие элементы прямо перед скриншотом
+            self.hide_popups_and_overlays(page)
+            time.sleep(1)  # Даем время на применение
+            
             img_path = os.path.join(base_dir, f"{session_id}_{block_title.lower()}.png")
             el.screenshot(path=img_path)
             
@@ -688,6 +823,10 @@ class RenderScreenshotCollector:
         if hasattr(self, 'temp_dir'):
             base_dir = self.temp_dir
         os.makedirs(base_dir, exist_ok=True)
+        
+        # СКРЫВАЕМ ВСПЛЫВАЮЩИЕ ЭЛЕМЕНТЫ ПЕРЕД ПОИСКОМ
+        self.hide_popups_and_overlays(page)
+        
         self.simulate_human_behavior(page, full_scroll=True)
         userinfo_div = None
         
@@ -746,6 +885,10 @@ class RenderScreenshotCollector:
             return None
 
         try:
+            # Еще раз скрываем всплывающие элементы прямо перед скриншотом
+            self.hide_popups_and_overlays(page)
+            time.sleep(1)  # Даем время на применение
+            
             img_path = os.path.join(base_dir, f"{session_id}_userinfo.png")
             userinfo_div.screenshot(path=img_path)
             
