@@ -21,7 +21,7 @@ from scripts.collect_links import main as run_collect_links_main
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-scheduler_running = True
+scheduler_running = False
 moscow_tz = pytz.timezone("Europe/Moscow")
 
 def run_daily_analytics_pipeline():
@@ -96,17 +96,23 @@ def run_scheduler():
 async def lifespan(app: FastAPI):
     """Управление жизненным циклом приложения"""
     
-    # --- 3. ИЗМЕНЯЕМ ЗАДАЧУ В ПЛАНИРОВЩИКЕ ---
-    # Теперь по расписанию вызывается легкая функция-обертка
-    schedule.every().day.at("06:00", moscow_tz).do(run_pipeline_in_background)
+    # ИСПРАВЛЯЕМ: Сначала устанавливаем флаг
+    global scheduler_running
+    scheduler_running = True
     
+    # Добавляем задачи
+    schedule.every().day.at("06:00", moscow_tz).do(run_pipeline_in_background)
+    # Тестовая задача каждые 5 минут
+    schedule.every(5).minutes.do(lambda: logger.info("🔔 ТЕСТ: Планировщик работает!"))
+    
+    # Запускаем планировщик
     scheduler_thread = threading.Thread(target=run_scheduler, daemon=True)
     scheduler_thread.start()
     
     logger.info("🚀 Приложение запущено")
     yield
     
-    global scheduler_running
+    # При завершении
     scheduler_running = False
     logger.info("🛑 Планировщик остановлен")
 
