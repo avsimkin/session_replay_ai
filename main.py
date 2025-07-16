@@ -84,9 +84,13 @@ def run_pipeline_in_background():
 def run_scheduler():
     """Запуск планировщика задач в отдельном потоке"""
     logger.info("⏰ Планировщик задач запущен")
+    logger.info(f"📅 Текущие задачи: {len(schedule.jobs)} шт.")
+    
     while scheduler_running:
+        logger.info(f"⏰ Планировщик проверяет задачи... Время: {datetime.now(moscow_tz)}")
         schedule.run_pending()
         time.sleep(60)
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
