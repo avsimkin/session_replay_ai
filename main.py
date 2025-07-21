@@ -34,10 +34,9 @@ def run_daily_analytics_pipeline():
 
         # --- ШАГ 1: Сбор ссылок ---
         logger.info("📝 [ФОНОВЫЙ ПРОЦЕСС] Выполняем этап: Сбор Session Replay ссылок")
-        # Тут может быть прямой вызов вашей функции сбора ссылок
-        # from scripts.collect_links import main as run_collect_links_main
-        # result_links = run_collect_links_main()
-        # logger.info(f"✅ [ФОНОВЫЙ ПРОЦЕСС] Этап 'Сбор ссылок' завершен.")
+        from scripts.collect_links import main as run_collect_links_main
+        result_links = run_collect_links_main()
+        logger.info(f"✅ [ФОНОВЫЙ ПРОЦЕСС] Этап 'Сбор ссылок' завершен.")
 
         # --- ШАГ 2: Извлечение текста OCR ---
         logger.info("📝 [ФОНОВЫЙ ПРОЦЕСС] Выполняем этап: Извлечение текста OCR")
